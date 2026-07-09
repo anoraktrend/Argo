@@ -29,7 +29,7 @@ jobs:
 
       - name: Create self-extracting release archive
         run: |
-          ./ccompress compress.c Makefile -o Argo.c
+          ./ccompress compress.c Makefile README.md -o Argo.c
           echo "=== Release archive contents ==="
           head -5 Argo.c
 
@@ -39,7 +39,8 @@ jobs:
           ./verify
           diff compress.c compress.c
           diff Makefile Makefile
-          rm -f verify compress.c Makefile
+          diff README.md README.md
+          rm -f verify compress.c Makefile README.md
           echo "Round-trip OK"
 
       - name: Restore source for release artifact clarity
@@ -49,7 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf 'Self-extracting C archive containing the ccompress source.\n\nUsage:\n  cc -o extract Argo.c && ./extract\n\nProduces: compress.c, Makefile\n' > release-notes.md
+          printf 'Self-extracting C archive containing the ccompress source.\n\nUsage:\n  cc -o extract Argo.c && ./extract\n\nProduces: compress.c, Makefile, README.md\n' > release-notes.md
           gh release upload "${{ steps.tag.outputs.name }}" Argo.c --clobber \
             --repo "${{ github.repository }}" || {
             gh release create "${{ steps.tag.outputs.name }}" Argo.c \
