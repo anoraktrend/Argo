@@ -2,3 +2,4 @@ ccompress
 extract
 test_extract
 *.o
+RELEASE_NOTES.md
