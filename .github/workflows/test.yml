@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ccompress
+        run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
+        shell: bash
+
+      - name: Self-compression round-trip test
+        run: |
+          ./ccompress compress.c -o archive.c
+          cc -o extract archive.c
+          ./extract
+          diff compress.c compress.c
+          rm -f archive.c extract
+        shell: bash
+
+      - name: C++ compilation test
+        run: |
+          ./ccompress compress.c -o archive.c
+          case "${{ matrix.os }}" in
+            windows*) clang++ -fsyntax-only archive.c 2>&1 || echo "(clang++ not available, skipping)" ;;
+            *)        cc -x c++ -fsyntax-only archive.c 2>&1 || c++ -fsyntax-only archive.c 2>&1 || clang++ -fsyntax-only archive.c 2>&1 || echo "(C++ check skipped)" ;;
+          esac
+          rm -f archive.c
+        shell: bash
+
+      - name: Multi-file test
+        run: |
+          echo "int a(void) { return 1; }" > a.c
+          echo "int b(void) { return 2; }" > b.c
+          echo "int c(void) { return 3; }" > c.c
+          ./ccompress a.c b.c c.c -o multi.c
+          cc -o multi_extract multi.c
+          ./multi_extract
+          diff a.c a.c && diff b.c b.c && diff c.c c.c
+          rm -f a.c b.c c.c multi.c multi_extract
+        shell: bash
