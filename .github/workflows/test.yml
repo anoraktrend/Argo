@@ -20,18 +20,20 @@ jobs:
 
       - name: C++ compilation test
         run: |
-          ./ccompress compress.c -o /tmp/archive.c
-          cc -x c++ -fsyntax-only /tmp/archive.c 2>&1 || c++ -fsyntax-only /tmp/archive.c 2>&1 || echo "(C++ check skipped)"
+          ./ccompress compress.c -o archive.c
+          cc -x c++ -fsyntax-only archive.c 2>&1 || c++ -fsyntax-only archive.c 2>&1 || echo "(C++ check skipped)"
+          rm -f archive.c
 
       - name: Multi-file test
         run: |
-          echo "int a(void) { return 1; }" > /tmp/a.c
-          echo "int b(void) { return 2; }" > /tmp/b.c
-          echo "int c(void) { return 3; }" > /tmp/c.c
-          ./ccompress /tmp/a.c /tmp/b.c /tmp/c.c -o /tmp/multi.c
-          cc -o /tmp/multi_extract /tmp/multi.c
-          /tmp/multi_extract
-          diff /tmp/a.c /tmp/a.c && diff /tmp/b.c /tmp/b.c && diff /tmp/c.c /tmp/c.c
+          mkdir -p /tmp/mtest
+          echo "int a(void) { return 1; }" > /tmp/mtest/a.c
+          echo "int b(void) { return 2; }" > /tmp/mtest/b.c
+          echo "int c(void) { return 3; }" > /tmp/mtest/c.c
+          ./ccompress /tmp/mtest/a.c /tmp/mtest/b.c /tmp/mtest/c.c -o /tmp/mtest/multi.c
+          cc -o /tmp/mtest/extract /tmp/mtest/multi.c
+          (cd /tmp/mtest && ./extract)
+          diff /tmp/mtest/a.c /tmp/mtest/a.c && diff /tmp/mtest/b.c /tmp/mtest/b.c && diff /tmp/mtest/c.c /tmp/mtest/c.c
 
   os_matrix:
     strategy:
@@ -47,7 +49,9 @@ jobs:
 
       - name: Self-compression round-trip
         run: |
-          ./ccompress compress.c -o /tmp/archive.c
-          cc -o /tmp/extract /tmp/archive.c
-          /tmp/extract
-          diff compress.c compress.c
+          cp compress.c /tmp/orig.c
+          ./ccompress /tmp/orig.c -o archive.c
+          cc -o extract archive.c
+          ./extract
+          diff /tmp/orig.c compress.c
+          rm -f archive.c extract
