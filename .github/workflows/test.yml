@@ -48,6 +48,7 @@ jobs:
         shell: bash
 
       - name: Self-compression round-trip
+        shell: bash
         run: |
           cp compress.c /tmp/orig.c
           ./ccompress /tmp/orig.c -o archive.c
