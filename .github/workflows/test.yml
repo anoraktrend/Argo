@@ -47,12 +47,6 @@ jobs:
         run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
         shell: bash
 
-      - name: Self-compression round-trip
+      - name: Full test suite
         shell: bash
-        run: |
-          cp compress.c /tmp/orig.c
-          ./ccompress /tmp/orig.c -o archive.c
-          cc -o extract archive.c
-          ./extract
-          diff /tmp/orig.c compress.c
-          rm -f archive.c extract
+        run: bash test/run.sh
