@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
 
 #if defined(_WIN32) && !defined(__MINGW32__)
 static char *strdup(const char *s) {
@@ -16,17 +19,50 @@ static char *strdup(const char *s) {
 #define MAXM 258
 #define MXF  64
 #define WIN2 8192
+#define HB 15
+#define HS (1<<HB)
+#define HC 64
 
 typedef struct { unsigned char *d; size_t sz, cp; } Bf;
 
+static size_t hh[HS];
+static size_t hn[WIN2];
+
+static void hr(void) {
+    memset(hh, 0xFF, sizeof(hh));
+}
+
+static unsigned hsh(const unsigned char *d, size_t p) {
+    return ((unsigned)d[p]*773u + (unsigned)d[p+1]*97u + (unsigned)d[p+2]) & (HS-1);
+}
+
 static int mtch(const unsigned char *d, size_t p, size_t n, int *l) {
+    if (p + MINM > n) return -1;
+    unsigned h = hsh(d, p);
     int bl = 0, bo = 0;
-    size_t end = p > WIN2 ? p - WIN2 : 0;
-    for (size_t i = p; i-- > end; ) {
-        int m = 0;
-        while (m < MAXM && p+m < n && d[i+m] == d[p+m]) m++;
-        if (m > bl) { bl = m; bo = (int)(p - i); if (m == MAXM) break; }
+    size_t lim = p > WIN2 ? p - WIN2 : 0;
+    int cnt = 0;
+    size_t i = hh[h];
+    while (i >= lim && i < p && cnt < HC) {
+        if (d[i] == d[p] && d[i+1] == d[p+1] && d[i+2] == d[p+2]) {
+            int m = MINM;
+#if defined(__SSE2__) && defined(__GNUC__)
+            while (m + 16 <= MAXM && p + m + 16 <= n) {
+                int eq = _mm_movemask_epi8(_mm_cmpeq_epi8(
+                    _mm_loadu_si128((const __m128i*)(d + i + m)),
+                    _mm_loadu_si128((const __m128i*)(d + p + m))));
+                if (eq != 0xFFFF) { m += __builtin_ctz(~eq & 0xFFFFu); break; }
+                m += 16;
+            }
+#endif
+            while (p + m < n && d[i+m] == d[p+m] && m < MAXM) m++;
+            if (m > bl) { bl = m; bo = (int)(p - i); if (m == MAXM) break; }
+        }
+        i = hn[i & (WIN2-1)];
+        cnt++;
     }
+    hn[p & (WIN2-1)] = hh[h];
+    hh[h] = p;
     if (bl >= MINM) { *l = bl; return bo; }
     return -1;
 }
@@ -40,26 +76,60 @@ static void bp(Bf *b, unsigned char c) {
     b->d[b->sz++] = c;
 }
 
+static int xor86(const unsigned char *d, size_t n) {
+    if (n < 8) return 0;
+    int c = 0;
+    for (size_t i = 0; i + 4 < n; i++)
+        if ((d[i] == 0xE8 || d[i] == 0xE9) && (d[i+4] == 0x00 || d[i+4] == 0xFF))
+            if (++c > 4) return 1;
+    return 0;
+}
+
+static unsigned char *e8e9(const unsigned char *d, size_t n) {
+    if (!xor86(d, n)) return NULL;
+    unsigned char *p = malloc(n);
+    if (!p) exit(1);
+    memcpy(p, d, n);
+    for (size_t i = 0; i + 4 < n; i++)
+        if ((p[i] == 0xE8 || p[i] == 0xE9) && (p[i+4] == 0x00 || p[i+4] == 0xFF)) {
+            unsigned a = (unsigned)p[i+1] | (unsigned)p[i+2]<<8 | (unsigned)p[i+3]<<16;
+            a += (unsigned)i;
+            p[i+1] = (unsigned char)a;
+            p[i+2] = (unsigned char)(a>>8);
+            p[i+3] = (unsigned char)(a>>16);
+            i += 4;
+        }
+    return p;
+}
+
 static void cmp(const unsigned char *in, size_t n, Bf *out) {
-    if (!n) return;
+    if (!n) { bp(out, 0); return; }
+    unsigned char *tx = e8e9(in, n);
+    const unsigned char *src = tx ? tx : in;
+    bp(out, (unsigned char)(tx ? 1 : 0));
+    hr();
     size_t pos = 0, fp = 0;
     unsigned char f = 0; int bit = 0;
     bp(out, 0); fp = out->sz - 1;
     while (pos < n) {
-        int ml, mo = mtch(in, pos, n, &ml);
+        int ml, mo = mtch(src, pos, n, &ml);
         if (mo > 0) {
-            f |= (unsigned char)(1 << bit);
+            unsigned char tok = mo < 256 ? 1 : 2;
+            f |= (unsigned char)(tok << (bit*2));
             bp(out, (unsigned char)(ml - MINM));
-            bp(out, (unsigned char)(mo >> 8));
-            bp(out, (unsigned char)mo);
+            if (mo < 256) bp(out, (unsigned char)mo);
+            else { bp(out, (unsigned char)(mo >> 8)); bp(out, (unsigned char)mo); }
             pos += (size_t)ml;
-        } else { bp(out, in[pos]); pos++; }
-        if (++bit == 8) {
+        } else {
+            bp(out, src[pos]); pos++;
+        }
+        if (++bit == 4) {
             out->d[fp] = f; f = 0; bit = 0;
             bp(out, 0); fp = out->sz - 1;
         }
     }
-    if (bit) out->d[fp] = f; else out->sz--;
+    if (bit) { out->d[fp] = f; } else out->sz--;
+    free(tx);
 }
 
 static void esc(FILE *o, const char *s, size_t n) {
@@ -124,12 +194,20 @@ static int gen(const char *path, const char **fn, size_t *fl,
     for (int i = 0; i < nf; i++) fprintf(o, "D%d,", i);
     fputs("};\n", o);
     fprintf(o, "static int F=%d;\n", nf);
+    fputs("static void x86(unsigned char*d,size_t n){\n", o);
+    fputs("for(size_t i=0;i+4<n;i++)\n", o);
+    fputs("if((d[i]==0xE8||d[i]==0xE9)&&(d[i+4]==0||d[i+4]==0xFF)){\n", o);
+    fputs("unsigned a=(unsigned)d[i+1]|(unsigned)d[i+2]<<8|(unsigned)d[i+3]<<16;\n", o);
+    fputs("a-=i;d[i+1]=a;d[i+2]=a>>8;d[i+3]=a>>16;i+=4;}}\n", o);
     fputs("static void lz(const unsigned char*i,size_t n,unsigned char*e){\n", o);
-    fputs("size_t p=0,q=0;while(p<n){unsigned char f=i[p++];\n", o);
-    fputs("for(int b=0;b<8&&p<n;b++){if(f&(1<<b)){\n", o);
-    fputs("int L=i[p]+M;int off=(i[p+1]<<8)|i[p+2];p+=3;\n", o);
-    fputs("for(int j=0;j<L;j++)e[q+j]=e[q+j-off];q+=L;\n", o);
-    fputs("}else e[q++]=i[p++];}}}\n", o);
+    fputs("int e8=i[0];size_t p=1,q=0;\n", o);
+    fputs("while(p<n){unsigned char f=i[p++];\n", o);
+    fputs("for(int b=0;b<4&&p<n;b++){int t=f&3;f>>=2;\n", o);
+    fputs("if(t==0)e[q++]=i[p++];\n", o);
+    fputs("else{int L=i[p++]+M;\n", o);
+    fputs("if(t==1){int o=i[p++];for(int j=0;j<L;j++)e[q+j]=e[q+j-o];q+=L;}\n", o);
+    fputs("else{int o=(i[p]<<8)|i[p+1];p+=2;for(int j=0;j<L;j++)e[q+j]=e[q+j-o];q+=L;}}}}\n", o);
+    fputs("if(e8)x86(e,q);}\n", o);
     fputs("static int v85(unsigned char c){return c=='!'?0:c<='['?c-34:c-35;}\n", o);
     fputs("static void b8(const unsigned char*i,size_t n,unsigned char*e){\n", o);
     fputs("size_t p=0,q=0,w;while(p+4<n){\n", o);
