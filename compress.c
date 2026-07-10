@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <limits.h>
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
 
-#if defined(_WIN32) && !defined(__MINGW32__)
+#if defined(_WIN32) && !defined(__MINGW32__) && !defined(_POSIX_C_SOURCE)
 static char *strdup(const char *s) {
     size_t n = strlen(s) + 1;
     char *p = malloc(n);
@@ -28,9 +30,11 @@ typedef struct { unsigned char *d; size_t sz, cp; } Bf;
 
 static void bp(Bf *b, unsigned char c) {
     if (b->sz >= b->cp) {
-        b->cp = b->cp ? b->cp*2 : 65536;
-        b->d = realloc(b->d, b->cp);
+        size_t ncp = b->cp ? b->cp * 2 : 65536;
+        if (ncp < b->cp) { fprintf(stderr, "OOM\n"); exit(1); }
+        b->d = realloc(b->d, ncp);
         if (!b->d) { fprintf(stderr, "OOM\n"); exit(1); }
+        b->cp = ncp;
     }
     b->d[b->sz++] = c;
 }
@@ -53,7 +57,10 @@ static void bb_init(Bbuf *b) { memset(b, 0, sizeof(*b)); }
 static void bb_free(Bbuf *b) { free(b->d); b->d = NULL; }
 static void bb_grow(Bbuf *b, size_t need) {
     size_t ncap = b->cap ? b->cap : 4096;
-    while (ncap < need) ncap *= 2;
+    while (ncap < need) {
+        if (ncap > (size_t)-1 / 2) { fprintf(stderr, "OOM\n"); exit(1); }
+        ncap *= 2;
+    }
     b->d = realloc(b->d, ncap);
     if (!b->d) { fprintf(stderr, "OOM\n"); exit(1); }
     if (ncap > b->cap) memset(b->d + b->cap, 0, ncap - b->cap);
@@ -91,7 +98,7 @@ static int mtch(const unsigned char *d, size_t p, size_t n, int *l) {
         if (d[i] == d[p] && d[i+1] == d[p+1] && d[i+2] == d[p+2]) {
             int m = MINM;
 #if defined(__SSE2__) && defined(__GNUC__)
-            while (m + 16 <= MAXM && p + m + 16 <= n) {
+            while (m + 16 <= MAXM && p + m + 16 <= n && i + m + 16 <= n) {
                 int eq = _mm_movemask_epi8(_mm_cmpeq_epi8(
                     _mm_loadu_si128((const __m128i*)(d + i + m)),
                     _mm_loadu_si128((const __m128i*)(d + p + m))));
@@ -123,7 +130,7 @@ static int xor86(const unsigned char *d, size_t n) {
 static unsigned char *e8e9(const unsigned char *d, size_t n) {
     if (!xor86(d, n)) return NULL;
     unsigned char *p = malloc(n);
-    if (!p) exit(1);
+    if (!p) return NULL;
     memcpy(p, d, n);
     for (size_t i = 0; i + 4 < n; i++)
         if ((p[i] == 0xE8 || p[i] == 0xE9) && (p[i+4] == 0x00 || p[i+4] == 0xFF)) {
@@ -482,15 +489,45 @@ static void b85e(FILE *o, const unsigned char *d, size_t n) {
     }
 }
 
+static void b85e_arr(FILE *o, const unsigned char *d, size_t n) {
+    size_t i = 0;
+    int first = 1;
+    for (; i + 4 <= n; i += 4) {
+        unsigned v = (unsigned)d[i]<<24 | d[i+1]<<16 | d[i+2]<<8 | d[i+3];
+        unsigned t = v; unsigned c[5];
+        for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
+        for (int j = 4; j >= 0; j--) {
+            unsigned x = c[j];
+            unsigned char out = (x == 0) ? '!' : (x <= 57 ? x + 34 : x + 35);
+            if (!first) fprintf(o, ",");
+            fprintf(o, "%d", out);
+            first = 0;
+        }
+    }
+    if (i < n) {
+        unsigned v = 0; int r = n - i;
+        for (int j = 0; j < r; j++) v |= (unsigned)d[i+j] << (24 - j*8);
+        unsigned t = v; unsigned c[5];
+        for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
+        for (int j = 4; j >= 0; j--) {
+            unsigned x = c[j];
+            unsigned char out = (x == 0) ? '!' : (x <= 57 ? x + 34 : x + 35);
+            if (!first) fprintf(o, ",");
+            fprintf(o, "%d", out);
+            first = 0;
+        }
+    }
+}
+
 static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
     if (!o) return 1;
-    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n", o);
+    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
     fputs("#define M 3\n", o);
-    fprintf(o, "static const unsigned char D[%zu]=\"", (cs[0]+3)/4*5);
-    b85e(o, cd, cs[0]);
-    fputs("\";\n", o);
+    fputs("static const unsigned char D[]={", o);
+    b85e_arr(o, cd, cs[0]);
+    fputs("};\n", o);
     fputs("static const char*N[]={", o);
     for (int i = 0; i < nf; i++) { esc(o, fn[i], fl[i]); fputs(",", o); }
     fputs("};\n", o);
@@ -583,13 +620,20 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("}\n", o);
     fputs("if(e8)x86(e,q);}\n", o);
 
-    fprintf(o, "int main(){\nsize_t i,ts=0;\n");
+    fputs("static int mkpath(const char *path){\n", o);
+    fputs("char *p=strdup(path),*s=p,*last=0;if(!p)return 1;\n", o);
+    fputs("for(;*s;s++)if(*s=='/'){last=s;*s=0;mkdir(p,0777);*s='/';}\n", o);
+    fputs("if(last){*last=0;mkdir(p,0777);*last='/';}\n", o);
+    fputs("free(p);return 0;}\n", o);
+
+    fprintf(o, "int main(void){\nsize_t i,ts=0;\n");
     for (int i = 0; i < nf; i++) fprintf(o, "ts+=S[%d];\n", i);
     fputs("unsigned char*b=malloc(ts);if(!b)return 1;\n", o);
     fprintf(o, "size_t cl=(C+3)/4*4;\n");
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
-    fputs("size_t off=0;\nfor(i=0;i<F;i++){\n", o);
+    fputs("size_t off=0;\nfor(i=0;i<(size_t)F;i++){\n", o);
+    fputs("mkpath(N[i]);\n", o);
     fputs("FILE*f=fopen(N[i],\"wb\");if(!f){free(b);return 1;}\n", o);
     fputs("fwrite(b+off,1,S[i],f);fclose(f);off+=S[i];puts(N[i]);}\n", o);
     fputs("free(b);\nreturn 0;}\n", o);
@@ -607,16 +651,20 @@ int main(int argc, char **argv) {
     }
     if (!ni) { fprintf(stderr, "usage: %s [-o out.c] files...\n", argv[0]); return 1; }
 
-    unsigned char *db[MXF];
+    unsigned char *db[MXF] = {0};
     size_t osz[MXF], csz[MXF];
     Bf cb = {0};
+    int ret = 1;
+
     for (int i = 0; i < ni; i++) {
         FILE *f = fopen(in[i], "rb");
-        if (!f) return 1;
+        if (!f) { ret = 1; goto cleanup; }
         fseek(f, 0, SEEK_END); long n = ftell(f); rewind(f);
-        db[i] = malloc((size_t)n+1);
-        if (!db[i]) return 1;
-        fread(db[i], 1, (size_t)n, f); fclose(f);
+        if (n < 0) { fclose(f); ret = 1; goto cleanup; }
+        db[i] = malloc((size_t)n + 1);
+        if (!db[i]) { fclose(f); ret = 1; goto cleanup; }
+        if (fread(db[i], 1, (size_t)n, f) != (size_t)n) { fclose(f); ret = 1; goto cleanup; }
+        fclose(f);
         osz[i] = (size_t)n;
     }
     for (int i = 0; i < ni; i++) {
@@ -629,9 +677,11 @@ int main(int argc, char **argv) {
     }
     size_t fl[MXF];
     for (int i = 0; i < ni; i++) fl[i] = strlen(in[i]);
-    gen(out, in, fl, cb.d, csz, osz, ni);
+    if (gen(out, in, fl, cb.d, csz, osz, ni) != 0) { ret = 1; goto cleanup; }
     printf("%s\n", out);
+    ret = 0;
+cleanup:
     for (int i = 0; i < ni; i++) free(db[i]);
     free(cb.d);
-    return 0;
+    return ret;
 }
