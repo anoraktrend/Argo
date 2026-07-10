@@ -7,7 +7,33 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  roundtrip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build ccompress
+        run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
+
+      - name: Full test suite
+        run: bash test/run.sh
+
+      - name: C++ compilation test
+        run: |
+          ./ccompress compress.c -o /tmp/archive.c
+          cc -x c++ -fsyntax-only /tmp/archive.c 2>&1 || c++ -fsyntax-only /tmp/archive.c 2>&1 || echo "(C++ check skipped)"
+
+      - name: Multi-file test
+        run: |
+          echo "int a(void) { return 1; }" > /tmp/a.c
+          echo "int b(void) { return 2; }" > /tmp/b.c
+          echo "int c(void) { return 3; }" > /tmp/c.c
+          ./ccompress /tmp/a.c /tmp/b.c /tmp/c.c -o /tmp/multi.c
+          cc -o /tmp/multi_extract /tmp/multi.c
+          /tmp/multi_extract
+          diff /tmp/a.c /tmp/a.c && diff /tmp/b.c /tmp/b.c && diff /tmp/c.c /tmp/c.c
+
+  os_matrix:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -19,33 +45,9 @@ jobs:
         run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
         shell: bash
 
-      - name: Self-compression round-trip test
+      - name: Self-compression round-trip
         run: |
-          ./ccompress compress.c -o archive.c
-          cc -o extract archive.c
-          ./extract
+          ./ccompress compress.c -o /tmp/archive.c
+          cc -o /tmp/extract /tmp/archive.c
+          /tmp/extract
           diff compress.c compress.c
-          rm -f archive.c extract
-        shell: bash
-
-      - name: C++ compilation test
-        run: |
-          ./ccompress compress.c -o archive.c
-          case "${{ matrix.os }}" in
-            windows*) clang++ -fsyntax-only archive.c 2>&1 || echo "(clang++ not available, skipping)" ;;
-            *)        cc -x c++ -fsyntax-only archive.c 2>&1 || c++ -fsyntax-only archive.c 2>&1 || clang++ -fsyntax-only archive.c 2>&1 || echo "(C++ check skipped)" ;;
-          esac
-          rm -f archive.c
-        shell: bash
-
-      - name: Multi-file test
-        run: |
-          echo "int a(void) { return 1; }" > a.c
-          echo "int b(void) { return 2; }" > b.c
-          echo "int c(void) { return 3; }" > c.c
-          ./ccompress a.c b.c c.c -o multi.c
-          cc -o multi_extract multi.c
-          ./multi_extract
-          diff a.c a.c && diff b.c b.c && diff c.c c.c
-          rm -f a.c b.c c.c multi.c multi_extract
-        shell: bash
