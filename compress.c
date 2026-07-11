@@ -656,6 +656,8 @@ int main(int argc, char **argv) {
     size_t total = 0;
     int ret = 1;
 
+    unsigned char *all = NULL;
+
     for (int i = 0; i < ni; i++) {
         FILE *f = fopen(in[i], "rb");
         if (!f) { ret = 1; goto cleanup; }
@@ -669,7 +671,7 @@ int main(int argc, char **argv) {
         total += osz[i];
     }
 
-    unsigned char *all = malloc(total);
+    all = malloc(total);
     if (!all) { ret = 1; goto cleanup; }
     size_t off = 0;
     for (int i = 0; i < ni; i++) {
