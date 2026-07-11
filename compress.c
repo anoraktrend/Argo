@@ -268,8 +268,8 @@ static void lz77_std(const unsigned char *src, size_t n, Bf *out) {
 }
 
 static void lz77_huf(const unsigned char *src, size_t n, Bf *out) {
-    int tok_freq[3] = {0};
-    int lit_freq[256] = {0};
+    int tok_freq[5] = {0};
+    int lit_freq[4][256] = {{0}};
     hr();
     {
         size_t pos = 0; size_t rp0 = 0, rp1 = 0, rp2 = 0;
@@ -277,31 +277,35 @@ static void lz77_huf(const unsigned char *src, size_t n, Bf *out) {
             int ml, mo = mtch(src, pos, n, &ml);
             if (mo > 0) {
                 int rp = -1;
-                if ((size_t)mo == rp0) rp = 0;
-                else if ((size_t)mo == rp1) rp = 1;
-                else if ((size_t)mo == rp2) rp = 2;
-                if (rp >= 0) { tok_freq[2]++;
-                    if (rp == 1) { size_t t = rp0; rp0 = rp1; rp1 = t; }
-                    else if (rp == 2) { size_t t = rp0; rp0 = rp2; rp2 = rp1; rp1 = t; }
-                } else { tok_freq[1]++; rp2 = rp1; rp1 = rp0; rp0 = (size_t)mo; }
+                if ((size_t)mo == rp0) rp = 1;
+                else if ((size_t)mo == rp1) rp = 2;
+                else if ((size_t)mo == rp2) rp = 3;
+                if (rp >= 1) { tok_freq[rp]++;
+                    if (rp == 1) {}
+                    else if (rp == 2) { size_t t = rp0; rp0 = rp1; rp1 = t; }
+                    else if (rp == 3) { size_t t = rp2; rp2 = rp1; rp1 = rp0; rp0 = t; }
+                } else { tok_freq[4]++; rp2 = rp1; rp1 = rp0; rp0 = (size_t)mo; }
                 pos += (size_t)ml;
-            } else { tok_freq[0]++; lit_freq[src[pos]]++; pos++; }
+            } else { tok_freq[0]++; lit_freq[pos & 3][src[pos]]++; pos++; }
         }
     }
 
-    unsigned char tok_len[3] = {0}; unsigned short tok_code[3] = {0};
-    unsigned char lit_len[256] = {0}; unsigned short lit_code[256] = {0};
-    huf_build(tok_freq, 3, tok_len);
-    huf_canon(tok_len, 3, tok_code);
-    huf_build(lit_freq, 256, lit_len);
-    huf_canon(lit_len, 256, lit_code);
+    unsigned char tok_len[5] = {0}; unsigned short tok_code[5] = {0};
+    unsigned char lit_len[4][256] = {{0}}; unsigned short lit_code[4][256] = {{0}};
+    huf_build(tok_freq, 5, tok_len);
+    huf_canon(tok_len, 5, tok_code);
+    for (int s = 0; s < 4; s++) {
+        huf_build(lit_freq[s], 256, lit_len[s]);
+        huf_canon(lit_len[s], 256, lit_code[s]);
+    }
 
     unsigned char vlb[16]; size_t vn;
     vn = vle(vlb, n); for (size_t vi = 0; vi < vn; vi++) bp(out, vlb[vi]);
-    huf_store(out, tok_len, 3);
-    huf_store(out, lit_len, 256);
+    huf_store(out, tok_len, 5);
+    for (int s = 0; s < 4; s++) huf_store(out, lit_len[s], 256);
 
     Bbuf bb; bb_init(&bb);
+    Bbuf bb_lit[4]; for (int s = 0; s < 4; s++) bb_init(&bb_lit[s]);
     hr();
     {
         size_t pos = 0; size_t rp0 = 0, rp1 = 0, rp2 = 0;
@@ -309,122 +313,55 @@ static void lz77_huf(const unsigned char *src, size_t n, Bf *out) {
             int ml, mo = mtch(src, pos, n, &ml);
             if (mo > 0) {
                 int rp = -1;
-                if ((size_t)mo == rp0) rp = 0;
-                else if ((size_t)mo == rp1) rp = 1;
-                else if ((size_t)mo == rp2) rp = 2;
-                if (rp >= 0) {
-                    bb_bits(&bb, tok_code[2], tok_len[2]);
-                    bb_bits(&bb, (unsigned)rp, 2);
+                if ((size_t)mo == rp0) rp = 1;
+                else if ((size_t)mo == rp1) rp = 2;
+                else if ((size_t)mo == rp2) rp = 3;
+                if (rp >= 1) {
+                    bb_bits(&bb, tok_code[rp], tok_len[rp]);
                     unsigned lv = (unsigned)(ml - MINM);
                     if (lv < 255) { bb_bits(&bb, lv, 8); }
                     else { bb_bits(&bb, 255, 8); bb_vli(&bb, lv - 255); }
-                    if (rp == 1) { size_t t = rp0; rp0 = rp1; rp1 = t; }
-                    else if (rp == 2) { size_t t = rp0; rp0 = rp2; rp2 = rp1; rp1 = t; }
+                    if (rp == 1) {}
+                    else if (rp == 2) { size_t t = rp0; rp0 = rp1; rp1 = t; }
+                    else if (rp == 3) { size_t t = rp2; rp2 = rp1; rp1 = rp0; rp0 = t; }
                 } else {
-                    bb_bits(&bb, tok_code[1], tok_len[1]);
+                    bb_bits(&bb, tok_code[4], tok_len[4]);
                     unsigned lv = (unsigned)(ml - MINM);
                     if (lv < 255) { bb_bits(&bb, lv, 8); }
                     else { bb_bits(&bb, 255, 8); bb_vli(&bb, lv - 255); }
-                    if ((size_t)mo < 128) { bb_bits(&bb, (unsigned)mo, 8); }
-                    else { bb_bits(&bb, ((unsigned)mo | 0x8000u), 16); }
+                    unsigned moff = (unsigned)mo;
+                    while (1) {
+                        bb_bits(&bb, (unsigned)(moff & 0x7F) | (moff >= 128 ? 0x80 : 0), 8);
+                        moff >>= 7;
+                        if (!moff) break;
+                    }
                     rp2 = rp1; rp1 = rp0; rp0 = (size_t)mo;
                 }
                 pos += (size_t)ml;
             } else {
                 bb_bits(&bb, tok_code[0], tok_len[0]);
                 unsigned char b = src[pos];
-                bb_bits(&bb, lit_code[b], lit_len[b]);
+                int s = pos & 3;
+                bb_bits(&bb_lit[s], lit_code[s][b], lit_len[s][b]);
                 pos++;
             }
         }
     }
     size_t nb = ((size_t)bb.pos + 7) / 8;
-#ifdef SELFTEST
-    fprintf(stderr,"SELFTEST n=%zu nb=%zu bp=%zu vn=",n,nb,bb.pos);
-    {
-        /* The generated decoder reads from `i` which starts at the flag byte.
-           out->d[0] is the flag byte (set by cmp(), not by us).
-           out->d[1..] has the VLE size, then tables, then bitstream (bb.d).
-           But wait: we write bb.d to out BELOW this point (at `for(i=0;i<nb;i++) bp(out,bb.d[i])`).
-           So out->d doesn't have the bitstream yet! 
-           We need to read the bitstream from bb.d, and the tables from out->d.
-           The decoder reads everything from one buffer because the bitstream is
-           appended after the tables during flush. We're reading before the flush,
-           so we need to read tables from out->d and bitstream from bb.d. */
-        const unsigned char *rp = out->d;
-        /* Skip flag byte (out->d[0]) */
-        rp++;
-        size_t us = vld(&rp);
-        fprintf(stderr,"%zu us=%zu\\n",us,us);
-        
-        int tc[16] = {0};
-        int tml = *rp++;
-        for (int j = 0; j < tml; j++) tc[j] = *rp++;
-        unsigned char ts[4]; int tt = 0;
-        for (int j = 0; j < tml; j++) tt += tc[j];
-        for (int j = 0; j < tt; j++) ts[j] = *rp++;
-        while (tml > 0 && !tc[tml-1]) tml--;
-        
-        int lc[16] = {0};
-        int lml = *rp++;
-        for (int j = 0; j < lml; j++) lc[j] = *rp++;
-        unsigned char ls[256]; int lt = 0;
-        for (int j = 0; j < lml; j++) lt += lc[j];
-        for (int j = 0; j < lt; j++) ls[j] = *rp++;
-        while (lml > 0 && !lc[lml-1]) lml--;
-        
-        int tbstart = (int)(rp - out->d);
-        fprintf(stderr,"tbstart=%zu tml=%d lml=%d tt=%d lt=%d\\n",(size_t)tbstart,tml,lml,tt,lt);
-        
-        unsigned char *de = malloc(n);
-        size_t bp = 0, q = 0; unsigned c;
-        int r0 = 0, r1 = 0, r2 = 0, iter = 0;
-        while (q < n && iter < 100000) {
-            iter++; c = 0; int fi = 0, fc = 0, t;
-            for (int l = 0; l < tml; l++) {
-                c = (c << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++;
-                if (tc[l] > 0 && (int)(c - fc) < tc[l]) { t = ts[fi + (c - fc)]; goto tdone; }
-                fi += tc[l]; fc = (fc + tc[l]) << 1;
-            } t = 0; tdone:
-            if (t == 0) {
-                c = 0; fi = 0; fc = 0;
-                for (int l = 0; l < lml; l++) {
-                    c = (c << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++;
-                    if (lc[l] > 0 && (int)(c - fc) < lc[l]) { de[q++] = ls[fi + (c - fc)]; break; }
-                    fi += lc[l]; fc = (fc + lc[l]) << 1;
-                }
-            } else if (t == 2) {
-                int ri = 0; for (int i = 0; i < 2; i++) { ri = (ri << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; }
-                int L = 0; for (int i = 0; i < 8; i++) { L = (L << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; }
-                if (L == 255) { unsigned char cb; size_t v = 0, s = 0; do { cb = 0; for (int i = 0; i < 8; i++) { cb = (cb << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; } v |= (size_t)(cb & 0x7F) << s; s += 7; } while (cb & 0x80); L = (int)(v + 255); }
-                L += 3; int o;
-                if (ri == 0) o = r0;
-                else if (ri == 1) { o = r1; r1 = r0; r0 = o; }
-                else { o = r2; r2 = r1; r1 = r0; r0 = o; }
-                int j; for (j=0;j<L;j++) de[q+j]=de[q+j-o]; q+=L;
-            } else {
-                int L = 0; for (int i = 0; i < 8; i++) { L = (L << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; }
-                if (L == 255) { unsigned char cb; size_t v = 0, s = 0; do { cb = 0; for (int i = 0; i < 8; i++) { cb = (cb << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; } v |= (size_t)(cb & 0x7F) << s; s += 7; } while (cb & 0x80); L = (int)(v + 255); }
-                L += 3;
-                int o = 0; for (int i = 0; i < 8; i++) { o = (o << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; }
-                if (o & 128) { int o2 = 0; for (int i = 0; i < 8; i++) { o2 = (o2 << 1) | ((bb.d[bp/8] >> (bp%8)) & 1); bp++; } o = ((o & 127) << 8) | o2; }
-                int j; for (j=0;j<L;j++) de[q+j]=de[q+j-o]; q+=L;
-                r2=r1; r1=r0; r0=o;
-            }
-        }
-        if (q != n || memcmp(de, src, n)) {
-            size_t ep = 0; while (ep < n && ep < q && de[ep] == src[ep]) ep++;
-            fprintf(stderr,"FAIL iter=%d q=%zu n=%zu ep=%zu exp=%02x got=%02x bp=%zu",iter,q,n,ep,src[ep],de[ep],bp);
-            if (q > ep) fprintf(stderr," prev: exp=%02x got=%02x",src[ep-1],de[ep-1]);
-            fputc('\n',stderr); exit(1);
-        } else {
-            fprintf(stderr,"OK q=%zu\n",q);
-        }
-        free(de);
-    }
-#endif
+    size_t nb_lit[4];
+    for (int s = 0; s < 4; s++) nb_lit[s] = ((size_t)bb_lit[s].pos + 7) / 8;
+    size_t jump[4]; jump[0] = nb;
+    for (int s = 1; s < 4; s++) jump[s] = jump[s-1] + nb_lit[s-1];
+    for (int s = 0; s < 4; s++) bp(out, (unsigned char)(jump[s] & 0xFF));
+    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 8) & 0xFF));
+    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 16) & 0xFF));
+    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 24) & 0xFF));
     for (size_t i = 0; i < nb; i++) bp(out, bb.d[i]);
+    for (int s = 0; s < 4; s++) {
+        for (size_t i = 0; i < nb_lit[s]; i++) bp(out, bb_lit[s].d[i]);
+    }
     bb_free(&bb);
+    for (int s = 0; s < 4; s++) bb_free(&bb_lit[s]);
 }
 
 static void cmp(const unsigned char *in, size_t n, Bf *out) {
@@ -581,26 +518,28 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("memset(e+e2,b,r);e2+=r;}return;}\n", o);
     fputs("int e8=flg==2||flg==5;size_t p=1,q=0,r0=0,r1=0,r2=0;\n", o);
 
-    fputs("if(flg>=4){\n", o);
+fputs("if(flg>=4){\n", o);
     fputs("size_t us=rd_vl(i,&p);\n", o);
-    fputs("int tc[16]={0};unsigned char ts[4];\n", o);
-    fputs("int lc[16]={0};unsigned char ls[256];\n", o);
+    fputs("int tc[16]={0};unsigned char ts[5];\n", o);
+    fputs("int lc[4][16]={{0}};unsigned char ls[4][256];\n", o);
     fputs("int tml,lml;\n", o);
     fputs("{const unsigned char*pp=i+p;tml=rd_tbl(&pp,tc,ts);p+=pp-(i+p);}\n", o);
-    fputs("{const unsigned char*pp=i+p;lml=rd_tbl(&pp,lc,ls);p+=pp-(i+p);}\n", o);
+    fputs("for(int s=0;s<4;s++){const unsigned char*pp=i+p;lml=rd_tbl(&pp,lc[s],ls[s]);p+=pp-(i+p);}\n", o);
+    fputs("size_t jump[4];for(int s=0;s<4;s++)jump[s]=(size_t)i[p+s]|((size_t)i[p+4+s]<<8)|((size_t)i[p+8+s]<<16)|((size_t)i[p+12+s]<<24);p+=16;\n", o);
+    fputs("size_t bp_lit[4];for(int s=0;s<4;s++)bp_lit[s]=(p+jump[s])*8;\n", o);
     fputs("size_t bp=p*8;\n", o);
     fputs("while(q<us){\n", o);
     fputs("int t=rd_huf(i,&bp,tc,ts,tml);\n", o);
-    fputs("if(t==0){e[q++]=(unsigned char)rd_huf(i,&bp,lc,ls,lml);}\n", o);
-    fputs("else if(t==2){\n", o);
-    fputs("int ri=rd_bits(i,&bp,2);int L=rd_bits(i,&bp,8);\n", o);
+    fputs("if(t==0){int s=q&3;e[q++]=(unsigned char)rd_huf(i,&bp_lit[s],lc[s],ls[s],lml);}\n", o);
+    fputs("else if(t>=1 && t<=3){\n", o);
+    fputs("int L=rd_bits(i,&bp,8);\n", o);
     fputs("if(L==255)L=(int)(rd_vlb(i,&bp)+(size_t)255);L+=M;int o;\n", o);
-    fputs("if(ri==0)o=r0;else if(ri==1){o=r1;r1=r0;r0=o;}else{o=r2;r2=r1;r1=r0;r0=o;}\n", o);
+    fputs("if(t==1)o=r0;else if(t==2){o=r1;r1=r0;r0=o;}else{o=r2;r2=r1;r1=r0;r0=o;}\n", o);
     fputs("int j;for(j=0;j<L;j++)e[q+j]=e[q+j-o];q+=L;}\n", o);
     fputs("else{int L=rd_bits(i,&bp,8);\n", o);
     fputs("if(L==255)L=(int)(rd_vlb(i,&bp)+(size_t)255);L+=M;\n", o);
-    fputs("int o=rd_bits(i,&bp,8);\n", o);
-    fputs("if(o&128){o=(o&127)<<8|rd_bits(i,&bp,8);}\n", o);
+    fputs("int o=0,shift=0,b;\n", o);
+    fputs("do{b=rd_bits(i,&bp,8);o|=(b&127)<<shift;shift+=7;}while(b&128);\n", o);
     fputs("int j;for(j=0;j<L;j++)e[q+j]=e[q+j-o];q+=L;\n", o);
     fputs("r2=r1;r1=r0;r0=o;}\n", o);
     fputs("}return;}\n", o);

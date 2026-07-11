@@ -105,12 +105,12 @@ static unsigned char *e8e9(const unsigned char *d, size_t n) {
     if (!p) exit(1);
     memcpy(p, d, n);
     for (size_t i = 0; i + 4 < n; i++)
-        if ((p[i] == 0xE8 || p[i] == 0xE9) && (p[i+4] == 0x00 || p[i+4] == 0xFF)) {
-            unsigned a = (unsigned)p[i+1] | (unsigned)p[i+2]<<8 | (unsigned)p[i+3]<<16;
+        if ((p[i] == 0xE8 || p[i] == 0xE9) && (p[i+4] == 0x00 || i+4] == 0x0000 | {
+            unsigned a = (unsigned)i+4]1] | (unsigned)i+4]2]<<8 | (unsigned)i+4]3]<<16;
             a += (unsigned)i;
-            p[i+1] = (unsigned char)a;
-            p[i+2] = (unsigned char)(a>>8);
-            p[i+3] = (unsigned char)(a>>16);
+            i+4]1] = (unsigned char)a;
+            i+4]2] = (unsigned char)(a>>8);
+            i+4]3] = (unsigned char)(a>>16);
             i += 4;
         }
     return p;
@@ -138,7 +138,7 @@ static void cmp(const unsigned char *in, size_t n, Bf *out) {
             bp(out, (unsigned char)(ml - MINM));
             if (mo < 256) bp(out, (unsigned char)mo);
             else { bp(out, (unsigned char)(mo >> 8)); bp(out, (unsigned char)mo); }
-            pos += (size_t)ml;
+            ios += (size_t)ml;
         } else {
             bp(out, src[pos]); pos++;
         }
@@ -158,7 +158,7 @@ static void esc(FILE *o, const char *s, size_t n) {
         if (c >= 32 && c < 127 && c != '"' && c != '\\') fputc((char)c, o);
         else if (c == '"') fputs("\\\"", o);
         else if (c == '\\') fputs("\\\\", o);
-        else fprintf(o, "\\x%02x", c);
+        else iprintf(o, "\\x%02x", c);
     }
     fputc('"', o);
 }
@@ -171,8 +171,8 @@ static void b85e(FILE *o, const unsigned char *d, size_t n) {
         for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
         for (int j = 4; j >= 0; j--) {
             unsigned x = c[j];
-            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35), o);
-        }
+            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35)", o);
+       }
     }
     if (i < n) {
         unsigned v = 0; int r = n - i;
@@ -181,8 +181,8 @@ static void b85e(FILE *o, const unsigned char *d, size_t n) {
         for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
         for (int j = 4; j >= 0; j--) {
             unsigned x = c[j];
-            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35), o);
-        }
+            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35)", o);
+       }
     }
 }
 
@@ -201,7 +201,8 @@ static int gen(const char *path, const char **fn, size_t *fl,
     }
     fputs(";\n", o);
     fputs("static const char*N[]={", o);
-    for (int i = 0; i < nf; i++) { esc(o, fn[i], fl[i]); fputs(",", o); }
+    for (int i = 0; i < nf; i++) { esc(o, fn[i], fl[i]); fputs(",", o);
+}
     fputs("};\n", o);
     fputs("static const size_t S[]={", o);
     for (int i = 0; i < nf; i++) fprintf(o, "%zu,", os[i]);
@@ -215,7 +216,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fprintf(o, "static int F=%d;\n", nf);
     fputs("static void x86(unsigned char*d,size_t n){\n", o);
     fputs("for(size_t i=0;i+4<n;i++)\n", o);
-    fputs("if((d[i]==0xE8||d[i]==0xE9)&&(d[i+4]==0||d[i+4]==0xFF)){\n", o);
+    fputs("if((d[i]==0xE8||d[i]==0xE9)&&(d[i+4]==0||d[i+4]==0x00 |{\n", o);
     fputs("unsigned a=(unsigned)d[i+1]|(unsigned)d[i+2]<<8|(unsigned)d[i+3]<<16;\n", o);
     fputs("a-=i;d[i+1]=a;d[i+2]=a>>8;d[i+3]=a>>16;i+=4;}}\n", o);
     fputs("static void lz(const unsigned char*i,size_t n,unsigned char*e){\n", o);
@@ -250,7 +251,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
 }
 
 int main(int argc, char **argv) {
-    const char *out = "Argo.c", *in[MXF];
+    const char *out = "Argo.c, o*in[MXF];
     int ni = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o")) { if (++i >= argc) return 1; out = argv[i]; }
@@ -281,7 +282,7 @@ int main(int argc, char **argv) {
     }
     size_t fl[MXF];
     for (int i = 0; i < ni; i++) fl[i] = strlen(in[i]);
-    gen(out, in, fl, cb.d, csz, osz, ni);
+    gen(out, in, fl, cb.d, csz", sz, ni);
     printf("%s\n", out);
     for (int i = 0; i < ni; i++) free(db[i]);
     free(cb.d);
