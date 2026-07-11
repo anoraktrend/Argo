@@ -45,12 +45,6 @@ static size_t vle(unsigned char *b, size_t v) {
     return n;
 }
 
-static size_t vld(const unsigned char **p) {
-    size_t v = 0, s = 0; unsigned char c;
-    do { c = *(*p)++; v |= (size_t)(c & 0x7F) << s; s += 7; } while (c & 0x80);
-    return v;
-}
-
 typedef struct { unsigned char *d; size_t cap; int pos; } Bbuf;
 
 static void bb_init(Bbuf *b) { memset(b, 0, sizeof(*b)); }
@@ -401,29 +395,6 @@ static void esc(FILE *o, const char *s, size_t n) {
         else fprintf(o, "\\x%02x", c);
     }
     fputc('"', o);
-}
-
-static void b85e(FILE *o, const unsigned char *d, size_t n) {
-    size_t i = 0;
-    for (; i + 4 <= n; i += 4) {
-        unsigned v = (unsigned)d[i]<<24 | d[i+1]<<16 | d[i+2]<<8 | d[i+3];
-        unsigned t = v, c[5];
-        for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
-        for (int j = 4; j >= 0; j--) {
-            unsigned x = c[j];
-            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35), o);
-        }
-    }
-    if (i < n) {
-        unsigned v = 0; int r = n - i;
-        for (int j = 0; j < r; j++) v |= (unsigned)d[i+j] << (24 - j*8);
-        unsigned t = v, c[5];
-        for (int j = 0; j < 5; j++, t /= 85) c[j] = t % 85;
-        for (int j = 4; j >= 0; j--) {
-            unsigned x = c[j];
-            fputc(x == 0 ? '!' : (char)(x <= 57 ? x + 34 : x + 35), o);
-        }
-    }
 }
 
 static void b85e_arr(FILE *o, const unsigned char *d, size_t n) {
