@@ -653,7 +653,7 @@ int main(int argc, char **argv) {
 
     unsigned char *db[MXF] = {0};
     size_t osz[MXF], csz[MXF];
-    Bf cb = {0};
+    size_t total = 0;
     int ret = 1;
 
     for (int i = 0; i < ni; i++) {
@@ -666,14 +666,26 @@ int main(int argc, char **argv) {
         if (fread(db[i], 1, (size_t)n, f) != (size_t)n) { fclose(f); ret = 1; goto cleanup; }
         fclose(f);
         osz[i] = (size_t)n;
+        total += osz[i];
     }
+
+    unsigned char *all = malloc(total);
+    if (!all) { ret = 1; goto cleanup; }
+    size_t off = 0;
     for (int i = 0; i < ni; i++) {
-        size_t s = cb.sz;
-        if (osz[i]) cmp(db[i], osz[i], &cb);
-        csz[i] = cb.sz - s;
+        memcpy(all + off, db[i], osz[i]);
+        off += osz[i];
     }
-    for (int i = 0; i < ni; i++) {
-        printf("%s: %zu -> %zu -> %zu b85\n", in[i], osz[i], csz[i], (csz[i]+3)/4*5);
+
+    Bf cb = {0};
+    if (total) cmp(all, total, &cb);
+    csz[0] = cb.sz;
+    for (int i = 1; i < ni; i++) csz[i] = 0;
+
+    if (ni == 1) {
+        printf("%s: %zu -> %zu -> %zu b85\n", in[0], osz[0], csz[0], (csz[0]+3)/4*5);
+    } else {
+        printf("  (combined: %zu -> %zu -> %zu b85)\n", total, csz[0], (csz[0]+3)/4*5);
     }
     size_t fl[MXF];
     for (int i = 0; i < ni; i++) fl[i] = strlen(in[i]);
@@ -681,6 +693,7 @@ int main(int argc, char **argv) {
     printf("%s\n", out);
     ret = 0;
 cleanup:
+    if (all) free(all);
     for (int i = 0; i < ni; i++) free(db[i]);
     free(cb.d);
     return ret;

@@ -1,0 +1,2 @@
+And this is file 2
+With different content to verify separate extraction works.

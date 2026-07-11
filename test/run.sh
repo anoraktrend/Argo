@@ -40,5 +40,25 @@ done
 
 rm -rf test/work
 echo "---"
+
+# --- Argo.c self-extracting archive test ---
+printf "[Argo.c self-extract] "
+rm -rf test/work_argo
+mkdir -p test/work_argo
+./ccompress compress.c Makefile README.md -o test/work_argo/Argo.c
+$CC -o test/work_argo/extract test/work_argo/Argo.c
+(cd test/work_argo && ./extract > /dev/null 2>&1)
+if diff -q compress.c test/work_argo/compress.c && \
+   diff -q Makefile test/work_argo/Makefile && \
+   diff -q README.md test/work_argo/README.md; then
+    echo "OK"
+    PASS=$((PASS+1))
+else
+    echo "FAIL"
+    FAIL=$((FAIL+1))
+fi
+rm -rf test/work_argo
+
+echo "---"
 echo "Passed: $PASS  Failed: $FAIL"
 test $FAIL -eq 0
