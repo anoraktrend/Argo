@@ -25,7 +25,7 @@ jobs:
         run: echo "name=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build ccompress
-        run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
+        run: cc -Wall -Wextra -pedantic -std=c23 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
 
       - name: Create self-extracting release archive
         run: |
@@ -50,7 +50,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf 'Self-extracting C archive containing the ccompress source.\n\nUsage:\n  cc -o extract Argo.c && ./extract\n\nProduces: compress.c, Makefile, README.md\n' > release-notes.md
+          cat > release-notes.md <<EOF
+# Argo ${{ steps.tag.outputs.name }}
+
+Self-extracting C archive containing the ccompress source.
+
+## Changes
+
+- LZMA2 compression with range-coded entropy coding and 11-bit probability models
+- Multithreaded chunked encoding via C11 threads
+- Multithreaded file extraction in the generated archive
+- Legacy LZ77/LZ78 fallback for incompressible data
+
+## Usage
+
+\`\`\`
+cc -o extract Argo.c && ./extract
+\`\`\`
+
+Produces: compress.c, Makefile, README.md
+EOF
           gh release upload "${{ steps.tag.outputs.name }}" Argo.c --clobber \
             --repo "${{ github.repository }}" || {
             gh release create "${{ steps.tag.outputs.name }}" Argo.c \
