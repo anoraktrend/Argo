@@ -21,6 +21,13 @@ foreach ($f in Get-ChildItem test/input) {
     & .\ccompress "test/input/$name" -o "test/work/$name.c" 2>$null
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compress)"; $FAIL++; continue }
 
+    # Debug: show N array from generated C file
+    $gen = Get-Content "test/work/$name.c" -Raw
+    if ($gen -match 'static const char\*N\[\]=\{') {
+        $match = [regex]::Match($gen, 'static const char\*N\[\]=\{(.*?)\};', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        Write-Host "  [dbg N array: $($match.Groups[1].Value)]"
+    }
+
     & $CC $CFLAGS "test/work/$name.c" "/Fetest/work/${name}_extract" 2>$null
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compile)"; $FAIL++; continue }
 
