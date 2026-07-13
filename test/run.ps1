@@ -27,6 +27,8 @@ foreach ($f in Get-ChildItem test/input) {
     New-Item -ItemType Directory -Force -Path "test/work/test/input" | Out-Null
     Push-Location test/work
     $out = & .\${name}_extract 2>&1
+    $exitCode = $LASTEXITCODE
+    Write-Host "  [dbg extract exit: $exitCode]"
     Write-Host "  [dbg extract out: $out]"
     Pop-Location
 
@@ -53,6 +55,8 @@ if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compile)"; $FAIL++; exit 1 }
 
 Push-Location test/work_argo
     $out = & .\extract 2>&1
+    $exitCode = $LASTEXITCODE
+    Write-Host "  [dbg argo extract exit: $exitCode]"
     Write-Host "  [dbg argo extract out: $out]"
     Pop-Location
 
