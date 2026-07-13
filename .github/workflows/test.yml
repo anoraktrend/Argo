@@ -20,6 +20,52 @@ jobs:
           name: Argo.c
           path: Argo.c
 
+  linux-musl:
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install deps
+        run: apk add --no-cache gcc musl-dev make
+      - name: Build and test
+        run: |
+          std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
+          cc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
+          make test
+          ./test/run.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test
+        run: |
+          std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
+          cc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
+          make test
+          ./test/run.sh
+
+  mingw:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pthread
+      - name: Build and test
+        run: |
+          std=c23; gcc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
+          gcc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
+          make test
+          ./test/run.sh
+
   msvc:
     needs: linux
     runs-on: windows-latest
@@ -32,12 +78,12 @@ jobs:
       - name: Compile Argo.c with MSVC
         run: cl Argo.c /FeArgo.exe
       - name: Extract and verify
-        shell: cmd
         run: |
           mkdir extract_test
-          copy compress.c Makefile README.md extract_test\
-          cd extract_test
+          Copy-Item compress.c,Makefile,README.md -Destination extract_test\
+          Push-Location extract_test
           ..\Argo.exe
-          fc /b compress.c ..\compress.c
-          fc /b Makefile ..\Makefile
-          fc /b README.md ..\README.md
+          Pop-Location
+          git diff --exit-code --no-index --ignore-cr-at-eol .\extract_test\compress.c .\compress.c
+          git diff --exit-code --no-index --ignore-cr-at-eol .\extract_test\Makefile .\Makefile
+          git diff --exit-code --no-index --ignore-cr-at-eol .\extract_test\README.md .\README.md

@@ -5,7 +5,7 @@ PASS=0 FAIL=0
 
 # --- Selftest: internal consistency check via -DSELFTEST ---
 printf "[selftest] "
-$CC -Wall -Wextra -pedantic -std=c99 -O2 -march=native \
+$CC -Wall -Wextra -pedantic -std=c99 -O2 \
    -D_POSIX_C_SOURCE=200809L -DSELFTEST -o /tmp/cc_selftest compress.c 2>/dev/null
 if /tmp/cc_selftest test/input/compress.c -o /tmp/cc_selftest_out.c 2>/dev/null; then
     echo "OK"; PASS=$((PASS+1))
