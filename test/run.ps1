@@ -18,7 +18,7 @@ foreach ($f in Get-ChildItem test/input) {
     Write-Host ("  {0,-25} " -f $name) -NoNewline
     $orig = $f.Length
 
-    & .\ccompress $f.FullName -o "test/work/$name.c" 2>$null
+    & .\ccompress "test/input/$name" -o "test/work/$name.c" 2>$null
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compress)"; $FAIL++; continue }
 
     & $CC $CFLAGS "test/work/$name.c" "/Fetest/work/${name}_extract" 2>$null
@@ -35,7 +35,7 @@ foreach ($f in Get-ChildItem test/input) {
     $extracted = "test/work/test/input/$name"
     if (Test-Path $extracted) {
         $size = (Get-Item $extracted).Length
-        git diff --exit-code --no-index --ignore-cr-at-eol $f.FullName $extracted 2>$null
+        git diff --exit-code --no-index --ignore-cr-at-eol "test/input/$name" $extracted 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Host ("OK  {0} -> {1}" -f $orig, $size); $PASS++
         } else { Write-Host "FAIL (diff)"; $FAIL++ }
