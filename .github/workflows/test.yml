@@ -58,7 +58,7 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: mingw-w64-x86_64-gcc make
+          install: mingw-w64-x86_64-gcc make diffutils
       - name: Build and test
         run: |
           std=c23; gcc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
