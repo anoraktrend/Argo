@@ -6,7 +6,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build ccompress
         run: |
           std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
@@ -15,7 +15,7 @@ jobs:
         run: make test
       - name: Generate Argo.c for downstream jobs
         run: ./ccompress compress.c Makefile README.md -o Argo.c
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Argo.c
           path: Argo.c
@@ -24,8 +24,8 @@ jobs:
     needs: linux
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: Argo.c
       - uses: ilammy/msvc-dev-cmd@v1
