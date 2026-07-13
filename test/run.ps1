@@ -26,7 +26,8 @@ foreach ($f in Get-ChildItem test/input) {
 
     New-Item -ItemType Directory -Force -Path "test/work/test/input" | Out-Null
     Push-Location test/work
-    & .\${name}_extract 2>$null
+    $out = & .\${name}_extract 2>&1
+    Write-Host "  [dbg extract out: $out]"
     Pop-Location
 
     $extracted = "test/work/test/input/$name"
@@ -51,8 +52,9 @@ if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compress)"; $FAIL++; exit 1 }
 if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compile)"; $FAIL++; exit 1 }
 
 Push-Location test/work_argo
-& .\extract 2>$null
-Pop-Location
+    $out = & .\extract 2>&1
+    Write-Host "  [dbg argo extract out: $out]"
+    Pop-Location
 
 $ok = $true
 foreach ($fn in @("compress.c", "Makefile", "README.md")) {
