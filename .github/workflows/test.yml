@@ -75,6 +75,8 @@ jobs:
         with:
           name: Argo.c
       - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
       - name: Compile Argo.c with MSVC
         run: cl Argo.c /FeArgo.exe
       - name: Extract and verify
