@@ -1037,6 +1037,11 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
+    fputs("#ifdef _MSC_VER\n", o);
+    fputs("for(i=0;i<(size_t)F;i++){\n", o);
+    fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return 1;\n", o);
+    fputs("fwrite(b+o,1,S[i],f);fclose(f);puts(N[i]);o+=S[i];}\n", o);
+    fputs("#else\n", o);
     fputs("long nh=1;\n", o);
     fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);
     fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
@@ -1051,7 +1056,9 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("mj[i].d=b;mj[i].a=i*cpf;mj[i].z=i==nt-1?F:(i+1)*cpf;\n", o);
     fputs("pthread_create(&tt[i],NULL,xt,&mj[i]);}\n", o);
     fputs("for(i=0;i<nt;i++)pthread_join(tt[i],NULL);\n", o);
-    fputs("free(tt);free(mj);free(b);return 0;}\n", o);
+    fputs("free(tt);free(mj);\n", o);
+    fputs("#endif\n", o);
+    fputs("free(b);return 0;}\n", o);
     fclose(o);
     return 0;
 }
