@@ -1014,16 +1014,22 @@ static int gen(const char *path, const char **fn, size_t *fl,
 
     fputs("static int mkpath(const char *path){\n", o);
     fputs("char *p=strdup(path),*s=p,*last=0;if(!p)return 1;\n", o);
+    fputs("#ifdef _MSC_VER\nfor(;*s;s++)if(*s=='/')*s='\\\\';\n#endif\n", o);
     fputs("for(;*s;s++)if(*s=='/'){last=s;*s=0;MKDIR(p);*s='/';}\n", o);
     fputs("if(last){*last=0;MKDIR(p);*last='/';}\n", o);
     fputs("free(p);return 0;}\n", o);
+
+    fputs("static char *fixpath(const char *path){\n", o);
+    fputs("char *p=strdup(path);if(!p)return 0;\n", o);
+    fputs("#ifdef _MSC_VER\nfor(char*s=p;*s;s++)if(*s=='/')*s='\\\\';\n#endif\n", o);
+    fputs("return p;}\n", o);
 
     fputs("typedef struct{unsigned char*d;size_t a;size_t z;}EJ;\n", o);
     fputs("static void *xt(void*p){EJ*j=p;size_t i;\n", o);
     fputs("size_t o=0;for(i=0;i<j->a;i++)o+=S[i];\n", o);
     fputs("for(i=j->a;i<j->z;i++){\n", o);
-    fputs("FILE*f=fopen(N[i],\"wb\");if(!f)return NULL;\n", o);
-    fputs("fwrite(j->d+o,1,S[i],f);fclose(f);o+=S[i];puts(N[i]);}return NULL;}\n", o);
+    fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return NULL;\n", o);
+    fputs("fwrite(j->d+o,1,S[i],f);fclose(f);puts(N[i]);o+=S[i];}return NULL;}\n", o);
 
     fprintf(o, "int main(void){\nsize_t i,ts=0;\n");
     for (int i = 0; i < nf; i++) fprintf(o, "ts+=S[%d];\n", i);
