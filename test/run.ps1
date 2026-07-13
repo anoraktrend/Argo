@@ -40,6 +40,11 @@ foreach ($f in Get-ChildItem test/input) {
     Pop-Location
 
     $extracted = "test/work/test/input/$name"
+    Write-Host "  [dbg checking $extracted]"
+    Write-Host "  [dbg exists: $(Test-Path $extracted)]"
+    # Check if file was created in wrong location
+    $wrong = "test/work/$name"
+    Write-Host "  [dbg wrong loc exists: $(Test-Path $wrong)]"
     if (Test-Path $extracted) {
         $size = (Get-Item $extracted).Length
         git diff --exit-code --no-index --ignore-cr-at-eol "test/input/$name" $extracted 2>$null
