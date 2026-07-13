@@ -4,9 +4,31 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
-#include <pthread.h>
 #include <unistd.h>
 
+#ifdef _MSC_VER
+#include <windows.h>
+#include <process.h>
+#else
+#include <pthread.h>
+#endif
+
+#ifdef _MSC_VER
+typedef HANDLE pthread_t;
+static int pthread_create(pthread_t *t, void *a, void *(*f)(void*), void *d) {
+    *t = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)f, d, 0, NULL);
+    return *t ? 0 : -1;
+}
+static int pthread_join(pthread_t t, void **r) {
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    return 0;
+}
+static int hw_threads(void) {
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    return (int)si.dwNumberOfProcessors;
+}
+#else
 static int hw_threads(void) {
 #ifdef _SC_NPROCESSORS_ONLN
     long n = sysconf(_SC_NPROCESSORS_ONLN);
@@ -15,6 +37,7 @@ static int hw_threads(void) {
     return 1;
 #endif
 }
+#endif
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
