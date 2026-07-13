@@ -4,6 +4,17 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <threads.h>
+#include <unistd.h>
+
+static int hw_threads(void) {
+#ifdef _SC_NPROCESSORS_ONLN
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+#else
+    return 1;
+#endif
+}
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
@@ -18,13 +29,53 @@ static char *strdup(const char *s) {
 #endif
 
 #define MINM 3
-#define MAXM 131074
-#define MXF  64
-#define WIN2 8192
-#define WIN1 16384
+#define MAXM 273
+#define MXF 64
+#define WIN2 (1<<20)
+#define WIN1 (1<<21)
 #define HB 15
 #define HS (1<<HB)
 #define HC 64
+
+typedef struct { size_t *hh, *hn; } MState;
+
+static MState *ms_new(void) {
+    MState *ms = calloc(1, sizeof(MState));
+    ms->hh = malloc(HS * sizeof(size_t));
+    ms->hn = calloc(WIN2, sizeof(size_t));
+    memset(ms->hh, 0xFF, HS * sizeof(size_t));
+    return ms;
+}
+
+static void ms_free(MState *ms) {
+    free(ms->hh); free(ms->hn); free(ms);
+}
+
+static void ms_reset(MState *ms) {
+    if (!ms->hh) {
+        ms->hh = malloc(HS * sizeof(size_t));
+        ms->hn = calloc(WIN2, sizeof(size_t));
+    }
+    memset(ms->hh, 0xFF, HS * sizeof(size_t));
+}
+
+static MState g_ms; /* single-thread fallback */
+
+static unsigned ms_hsh(const unsigned char *d, size_t p) {
+    return ((unsigned)d[p]*773u + (unsigned)d[p+1]*97u + (unsigned)d[p+2]) & (HS-1);
+}
+
+#define kNumBitModelTotalBits 11
+#define kNumMoveBits 5
+#define PROB_INIT_VAL ((1 << kNumBitModelTotalBits) / 2)
+#define kTopValue ((uint32_t)1 << 24)
+#define kNumStates 12
+#define kNumPosBitsMax 4
+#define kNumLenToPosStates 4
+#define kEndPosModelIndex 14
+#define kNumFullDistances (1 << (kEndPosModelIndex >> 1))
+#define kNumAlignBits 4
+#define kMatchMinLen 2
 
 typedef struct { unsigned char *d; size_t sz, cp; } Bf;
 
@@ -45,54 +96,17 @@ static size_t vle(unsigned char *b, size_t v) {
     return n;
 }
 
-typedef struct { unsigned char *d; size_t cap; int pos; } Bbuf;
-
-static void bb_init(Bbuf *b) { memset(b, 0, sizeof(*b)); }
-static void bb_free(Bbuf *b) { free(b->d); b->d = NULL; }
-static void bb_grow(Bbuf *b, size_t need) {
-    size_t ncap = b->cap ? b->cap : 4096;
-    while (ncap < need) {
-        if (ncap > (size_t)-1 / 2) { fprintf(stderr, "OOM\n"); exit(1); }
-        ncap *= 2;
-    }
-    b->d = realloc(b->d, ncap);
-    if (!b->d) { fprintf(stderr, "OOM\n"); exit(1); }
-    if (ncap > b->cap) memset(b->d + b->cap, 0, ncap - b->cap);
-    b->cap = ncap;
-}
-static void bb_bit(Bbuf *b, int bit) {
-    if ((size_t)b->pos / 8 >= b->cap) bb_grow(b, (size_t)b->pos / 8 + 1);
-    if (bit) b->d[b->pos / 8] |= (1 << (b->pos % 8));
-    b->pos++;
-}
-static void bb_bits(Bbuf *b, unsigned v, int n) {
-    for (int i = n - 1; i >= 0; i--) bb_bit(b, (v >> i) & 1);
-}
-static void bb_vli(Bbuf *b, size_t v) {
-    do { unsigned char c = v & 0x7F; v >>= 7; if (v) c |= 0x80; bb_bits(b, c, 8); } while (v);
-}
-
-static size_t hh[HS];
-static size_t hn[WIN2];
-
-static void hr(void) { memset(hh, 0xFF, sizeof(hh)); }
-
-static unsigned hsh(const unsigned char *d, size_t p) {
-    return ((unsigned)d[p]*773u + (unsigned)d[p+1]*97u + (unsigned)d[p+2]) & (HS-1);
-}
-
-static int mtch(const unsigned char *d, size_t p, size_t n, int *l) {
-    if (p + MINM > n) return -1;
-    unsigned h = hsh(d, p);
-    int bl = 0, bo = 0;
+static int mtch(MState *ms, const unsigned char *d, size_t sz, size_t p, int *l) {
+    if (p + MINM > sz) return -1;
+    int c = 0;
+    size_t i = ms->hh[ms_hsh(d, p)];
     size_t lim = p > WIN2 ? p - WIN2 : 0;
-    int cnt = 0;
-    size_t i = hh[h];
-    while (i >= lim && i < p && cnt < HC) {
+    int bl = 0, bo = 0;
+    while (i < sz && i >= lim && i < p && c < HC) {
         if (d[i] == d[p] && d[i+1] == d[p+1] && d[i+2] == d[p+2]) {
             int m = MINM;
 #if defined(__SSE2__) && defined(__GNUC__)
-            while (m + 16 <= MAXM && p + m + 16 <= n && i + m + 16 <= n) {
+            while (m + 16 <= MAXM && p + m + 16 <= sz && i + m + 16 <= sz) {
                 int eq = _mm_movemask_epi8(_mm_cmpeq_epi8(
                     _mm_loadu_si128((const __m128i*)(d + i + m)),
                     _mm_loadu_si128((const __m128i*)(d + p + m))));
@@ -100,15 +114,18 @@ static int mtch(const unsigned char *d, size_t p, size_t n, int *l) {
                 m += 16;
             }
 #endif
-            while (p + m < n && d[i+m] == d[p+m] && m < MAXM) m++;
+            while (p + m < sz && d[i+m] == d[p+m] && m < MAXM) m++;
             if (m > bl) { bl = m; bo = (int)(p - i); if (m == MAXM) break; }
         }
-        i = hn[i & (WIN2-1)];
-        cnt++;
+        i = ms->hn[i & (WIN2-1)];
+        c++;
     }
-    hn[p & (WIN2-1)] = hh[h];
-    hh[h] = p;
-    if (bl >= MINM) { *l = bl; return bo; }
+    ms->hn[p & (WIN2-1)] = ms->hh[ms_hsh(d, p)];
+    ms->hh[ms_hsh(d, p)] = p;
+    if (bl >= MINM) {
+        *l = bl;
+        return bo;
+    }
     return -1;
 }
 
@@ -138,14 +155,445 @@ static unsigned char *e8e9(const unsigned char *d, size_t n) {
     return p;
 }
 
-static int cmpbl(const unsigned char *d, size_t n) {
-    if (n < 16) return 1;
-    int l = 0;
-    for (size_t i = 0; i + MINM < n && i < 4096; i++) {
-        int ml; int mo = mtch(d, i, n, &ml);
-        if (mo > 0) { l += ml; hr(); }
+typedef struct {
+    uint32_t low;
+    uint32_t range;
+    uint32_t cache_size;
+    uint8_t cache;
+    Bf *out;
+} RangeEnc;
+
+static void rc_init(RangeEnc *rc, Bf *out) {
+    rc->low = 0;
+    rc->range = 0xFFFFFFFF;
+    rc->cache_size = 1;
+    rc->cache = 0;
+    rc->out = out;
+}
+
+static void rc_shift(RangeEnc *rc) {
+    uint32_t low = rc->low;
+    if (low < 0xFF000000 || (low >> 24) == 0xFF) {
+        uint8_t temp = rc->cache;
+        do {
+            bp(rc->out, (uint8_t)(temp + (uint8_t)(low >> 24)));
+            temp = 0xFF;
+        } while (--rc->cache_size);
+        rc->cache = (uint8_t)(low >> 24);
     }
-    return (size_t)l >= n / 8;
+    rc->cache_size++;
+    rc->low = low << 8;
+}
+
+static void rc_norm(RangeEnc *rc) {
+    while (rc->range < kTopValue) {
+        rc_shift(rc);
+        rc->range <<= 8;
+    }
+}
+
+static void rc_encode_bit(RangeEnc *rc, uint16_t *prob, int symbol) {
+    uint32_t bound = (rc->range >> kNumBitModelTotalBits) * (*prob);
+    if (symbol == 0) {
+        rc->range = bound;
+        *prob += ((1 << kNumBitModelTotalBits) - *prob) >> kNumMoveBits;
+    } else {
+        rc->low += bound;
+        rc->range -= bound;
+        *prob -= *prob >> kNumMoveBits;
+    }
+    rc_norm(rc);
+}
+
+static void rc_encode_direct(RangeEnc *rc, uint32_t value, int num) {
+    for (int i = num - 1; i >= 0; i--) {
+        rc->range >>= 1;
+        if ((value >> i) & 1)
+            rc->low += rc->range;
+        rc_norm(rc);
+    }
+}
+
+static void rc_flush(RangeEnc *rc) {
+    for (int i = 0; i < 5; i++)
+        rc_shift(rc);
+}
+
+static void rc_encode_bit_tree(RangeEnc *rc, uint16_t *probs, int num_bits, int symbol) {
+    int m = 1;
+    for (int i = num_bits - 1; i >= 0; i--) {
+        int bit = (symbol >> i) & 1;
+        rc_encode_bit(rc, &probs[m], bit);
+        m = (m << 1) | bit;
+    }
+}
+
+static void rc_encode_bit_tree_rev(RangeEnc *rc, uint16_t *probs, int num_bits, int symbol) {
+    int m = 1;
+    for (int i = 0; i < num_bits; i++) {
+        int bit = (symbol >> i) & 1;
+        rc_encode_bit(rc, &probs[m], bit);
+        m = (m << 1) | bit;
+    }
+}
+
+static unsigned update_state_literal(unsigned state) {
+    if (state < 4) return 0;
+    else if (state < 10) return state - 3;
+    else return state - 6;
+}
+static unsigned update_state_match(unsigned state) { return state < 7 ? 7 : 10; }
+static unsigned update_state_rep(unsigned state) { return state < 7 ? 8 : 11; }
+static unsigned update_state_shortrep(unsigned state) { return state < 7 ? 9 : 11; }
+
+static int lzma_encode(const unsigned char *src, size_t n, Bf *out,
+                       int lc, int lp, int pb) {
+    if (n == 0) return 0;
+
+    size_t prob_count = 1846 + 768 * (1 << (lp + lc));
+    uint16_t *probs = calloc(prob_count, sizeof(uint16_t));
+    if (!probs) { fprintf(stderr, "OOM\n"); return -1; }
+    for (size_t i = 0; i < prob_count; i++) probs[i] = PROB_INIT_VAL;
+
+    uint16_t *is_match = probs;
+    uint16_t *is_rep = is_match + (kNumStates << kNumPosBitsMax);
+    uint16_t *is_rep_g0 = is_rep + kNumStates;
+    uint16_t *is_rep_g1 = is_rep_g0 + kNumStates;
+    uint16_t *is_rep_g2 = is_rep_g1 + kNumStates;
+    uint16_t *is_rep0_long = is_rep_g2 + kNumStates;
+    uint16_t *pos_slot_decoder = is_rep0_long + (kNumStates << kNumPosBitsMax);
+    uint16_t *pos_decoders = pos_slot_decoder + (kNumLenToPosStates << 6);
+    uint16_t *align_decoder = pos_decoders + (1 + kNumFullDistances - kEndPosModelIndex);
+    uint16_t *len_choice = align_decoder + (1 << kNumAlignBits);
+    uint16_t *len_choice2 = len_choice + 1;
+    uint16_t *len_low_coder = len_choice2 + 1;
+    uint16_t *len_mid_coder = len_low_coder + (1 << kNumPosBitsMax) * (1 << 3);
+    uint16_t *len_high_coder = len_mid_coder + (1 << kNumPosBitsMax) * (1 << 3);
+    uint16_t *rep_len_choice = len_high_coder + (1 << 8);
+    uint16_t *rep_len_choice2 = rep_len_choice + 1;
+    uint16_t *rep_len_low_coder = rep_len_choice2 + 1;
+    uint16_t *rep_len_mid_coder = rep_len_low_coder + (1 << kNumPosBitsMax) * (1 << 3);
+    uint16_t *rep_len_high_coder = rep_len_mid_coder + (1 << kNumPosBitsMax) * (1 << 3);
+    uint16_t *lit_probs = rep_len_high_coder + (1 << 8);
+
+    MState *ms = ms_new();
+
+    RangeEnc rc;
+    rc_init(&rc, out);
+    bp(out, 0);
+
+    unsigned state = 0;
+    uint32_t rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0;
+    size_t pos = 0;
+
+    while (pos < n) {
+        unsigned pos_state = pos & ((1 << pb) - 1);
+        unsigned state2 = (state << kNumPosBitsMax) + pos_state;
+
+        int ml, mo = mtch(ms, src, n, pos, &ml);
+        int is_match_bit = mo > 0 ? 1 : 0;
+        rc_encode_bit(&rc, &is_match[state2], is_match_bit);
+
+        if (is_match_bit == 0) {
+            unsigned prev_byte = pos > 0 ? src[pos - 1] : 0;
+            unsigned lit_state = ((pos & ((1 << lp) - 1)) << lc) + (prev_byte >> (8 - lc));
+            uint16_t *lp_probs = lit_probs + 0x300 * lit_state;
+
+            if (state >= 7) {
+                unsigned match_byte = src[pos - rep0 - 1];
+                int symbol = 1;
+                while (symbol < 0x100) {
+                    unsigned match_bit = (match_byte >> 7) & 1;
+                    match_byte <<= 1;
+                    int bit = (src[pos] >> (7 - (symbol - 1))) & 1;
+                    rc_encode_bit(&rc, &lp_probs[((1 + match_bit) << 8) + symbol], bit);
+                    symbol = (symbol << 1) | bit;
+                    if ((int)match_bit != bit) break;
+                }
+                while (symbol < 0x100) {
+                    int bit = (src[pos] >> (7 - (symbol - 1))) & 1;
+                    rc_encode_bit(&rc, &lp_probs[symbol], bit);
+                    symbol = (symbol << 1) | bit;
+                }
+            } else {
+                int symbol = 1;
+                while (symbol < 0x100) {
+                    int bit = (src[pos] >> (7 - (symbol - 1))) & 1;
+                    rc_encode_bit(&rc, &lp_probs[symbol], bit);
+                    symbol = (symbol << 1) | bit;
+                }
+            }
+            pos++;
+            state = update_state_literal(state);
+        } else {
+            rc_encode_bit(&rc, &is_rep[state], 0);
+
+            int len;
+            uint32_t dist = (uint32_t)mo;
+            int rp = -1;
+            if (dist == rep0) rp = 0;
+            else if (dist == rep1) rp = 1;
+            else if (dist == rep2) rp = 2;
+            else if (dist == rep3) rp = 3;
+
+            if (rp >= 0) {
+                rc_encode_bit(&rc, &is_rep_g0[state], rp > 0 ? 1 : 0);
+                if (rp > 0) {
+                    rc_encode_bit(&rc, &is_rep_g1[state], rp > 1 ? 1 : 0);
+                    if (rp > 1) {
+                        rc_encode_bit(&rc, &is_rep_g2[state], rp > 2 ? 1 : 0);
+                    }
+                }
+
+                if (rp == 0) {
+                    rc_encode_bit(&rc, &is_rep0_long[state2], ml > 1 ? 1 : 0);
+                    if (ml == 1) {
+                        state = update_state_shortrep(state);
+                        pos++;
+                        continue;
+                    }
+                }
+
+                len = ml - kMatchMinLen;
+                uint16_t *rep_len_choice_ptr = rep_len_choice;
+                uint16_t *rep_len_choice2_ptr = rep_len_choice2;
+                rc_encode_bit(&rc, rep_len_choice_ptr, len >= 8 ? 1 : 0);
+                if (len < 8) {
+                    rc_encode_bit_tree(&rc, rep_len_low_coder + (pos_state << 3), 3, len);
+                } else {
+                    len -= 8;
+                    rc_encode_bit(&rc, rep_len_choice2_ptr, len >= 8 ? 1 : 0);
+                    if (len < 8) {
+                        rc_encode_bit_tree(&rc, rep_len_mid_coder + (pos_state << 3), 3, len);
+                    } else {
+                        len -= 8;
+                        rc_encode_bit_tree(&rc, rep_len_high_coder, 8, len);
+                    }
+                }
+
+                if (rp == 1) { uint32_t t = rep0; rep0 = rep1; rep1 = t; }
+                else if (rp == 2) { uint32_t t = rep0; rep0 = rep2; rep2 = rep1; rep1 = t; }
+                else if (rp == 3) { uint32_t t = rep0; rep0 = rep3; rep3 = rep2; rep2 = rep1; rep1 = t; }
+
+                len = ml - kMatchMinLen;
+                state = update_state_rep(state);
+                pos += ml;
+            } else {
+                len = ml - kMatchMinLen;
+                rc_encode_bit(&rc, &len_choice[0], len >= 8 ? 1 : 0);
+                if (len < 8) {
+                    rc_encode_bit_tree(&rc, len_low_coder + (pos_state << 3), 3, len);
+                } else {
+                    len -= 8;
+                    rc_encode_bit(&rc, &len_choice2[0], len >= 8 ? 1 : 0);
+                    if (len < 8) {
+                        rc_encode_bit_tree(&rc, len_mid_coder + (pos_state << 3), 3, len);
+                    } else {
+                        len -= 8;
+                        rc_encode_bit_tree(&rc, len_high_coder, 8, len);
+                    }
+                }
+
+                rep3 = rep2;
+                rep2 = rep1;
+                rep1 = rep0;
+                rep0 = dist;
+
+                state = update_state_match(state);
+                len = ml - kMatchMinLen;
+
+                unsigned len_state = len;
+                if (len_state > kNumLenToPosStates - 1)
+                    len_state = kNumLenToPosStates - 1;
+
+                unsigned pos_slot;
+                if (dist == 0) pos_slot = 0;
+                else if (dist == 1) pos_slot = 1;
+                else if (dist == 2) pos_slot = 2;
+                else if (dist == 3) pos_slot = 3;
+                else if (dist < 6) pos_slot = 4;
+                else if (dist < 8) pos_slot = 5;
+                else if (dist < 12) pos_slot = 6;
+                else if (dist < 16) pos_slot = 7;
+                else if (dist < 24) pos_slot = 8;
+                else if (dist < 32) pos_slot = 9;
+                else if (dist < 48) pos_slot = 10;
+                else if (dist < 64) pos_slot = 11;
+                else if (dist < 96) pos_slot = 12;
+                else if (dist < 128) pos_slot = 13;
+                else {
+                    unsigned bits = 0;
+                    uint32_t t = dist;
+                    while (t >= 128) { t >>= 1; bits++; }
+                    pos_slot = (bits + 1) * 2 + (t >= 2 ? 1 : 0);
+                }
+
+                rc_encode_bit_tree(&rc, pos_slot_decoder + (len_state << 6), 6, pos_slot);
+
+                if (pos_slot >= 4) {
+                    unsigned num_direct_bits = (pos_slot >> 1) - 1;
+                    uint32_t dist_out = ((2 | (pos_slot & 1)) << num_direct_bits);
+                    uint32_t dist_low = dist - dist_out;
+                    if (pos_slot < kEndPosModelIndex) {
+                        rc_encode_bit_tree_rev(&rc, pos_decoders + dist_out - pos_slot, num_direct_bits, dist_low);
+                    } else {
+                        rc_encode_direct(&rc, dist_low >> kNumAlignBits, num_direct_bits - kNumAlignBits);
+                        rc_encode_bit_tree_rev(&rc, align_decoder, kNumAlignBits, dist_low & ((1 << kNumAlignBits) - 1));
+                    }
+                }
+
+                pos += ml;
+            }
+        }
+    }
+
+    rc_encode_bit(&rc, &is_match[(state << kNumPosBitsMax) + (pos & ((1 << pb) - 1))], 1);
+    rc_encode_bit(&rc, &is_rep[state], 0);
+    rep3 = rep2; rep2 = rep1; rep1 = rep0;
+    rc_encode_bit(&rc, &len_choice[0], 0);
+    rc_encode_direct(&rc, 0xFFFFFFFF, 4);
+    rc_flush(&rc);
+
+    ms_free(ms);
+    free(probs);
+    return 0;
+}
+
+static void encode_lzma2_props(unsigned char *props, uint32_t dict_size) {
+    unsigned p;
+    if (dict_size == 0xFFFFFFFF)
+        p = 40;
+    else {
+        unsigned bits = 0;
+        uint32_t t = dict_size;
+        while (t > 1) { t >>= 1; bits++; }
+        p = (unsigned)((bits - 11) * 2 + ((dict_size >> (bits - 1)) & 1));
+    }
+    props[0] = (unsigned char)p;
+    props[1] = (unsigned char)((2 * 5 + 3) * 9 + 3);
+}
+
+typedef struct {
+    const unsigned char *src;
+    size_t n;
+    int lc, lp, pb;
+    int store; /* 1 = store uncompressed */
+    Bf result;
+    int ok;
+} LZMAWork;
+
+static int lzma_thread(void *arg) {
+    LZMAWork *w = (LZMAWork *)arg;
+    w->result = (Bf){0};
+    Bf *o = &w->result;
+    if (w->store || w->n < 32) {
+        bp(o, 0);
+        for (size_t i = 0; i < w->n; i++) bp(o, w->src[i]);
+        w->ok = 1;
+        return 0;
+    }
+    Bf raw = {0};
+    if (lzma_encode(w->src, w->n, &raw, w->lc, w->lp, w->pb) != 0) {
+        free(raw.d);
+        w->ok = 0;
+        return 0;
+    }
+    if (raw.sz >= w->n) {
+        free(raw.d);
+        bp(o, 0);
+        for (size_t i = 0; i < w->n; i++) bp(o, w->src[i]);
+        w->ok = 1;
+        return 0;
+    }
+    for (size_t i = 0; i < raw.sz; i++) bp(o, raw.d[i]);
+    free(raw.d);
+    w->ok = 1;
+    return 0;
+}
+
+static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t dict_size) {
+    if (n == 0) { bp(out, 0); bp(out, 0); return 0; }
+
+    unsigned char props_buf[2];
+    encode_lzma2_props(props_buf, dict_size);
+    int lc = 3, lp = 0, pb = 2;
+    int lzma_props = (unsigned char)((pb * 5 + lp) * 9 + lc);
+    size_t chunk_max = (1 << 18);
+
+    int nchunks = (int)((n + chunk_max - 1) / chunk_max);
+    if (nchunks < 1) nchunks = 1;
+    int nthreads = hw_threads();
+    if (nthreads < 1) nthreads = 1;
+
+    LZMAWork *works = calloc((size_t)nchunks, sizeof(LZMAWork));
+    thrd_t *threads = calloc((size_t)nchunks, sizeof(thrd_t));
+    size_t off = 0;
+
+    for (int i = 0; i < nchunks; i++) {
+        works[i].src = src + off;
+        works[i].n = n - off;
+        if (works[i].n > chunk_max) works[i].n = chunk_max;
+        works[i].lc = lc; works[i].lp = lp; works[i].pb = pb;
+        works[i].ok = 0;
+        off += works[i].n;
+    }
+
+    int launched = 0;
+    for (int i = 0; i < nchunks; i++) {
+        if (i < nthreads && nchunks > 1) {
+            if (thrd_create(&threads[i], lzma_thread, &works[i]) == thrd_success)
+                launched++;
+            else
+                lzma_thread(&works[i]);
+        } else {
+            lzma_thread(&works[i]);
+        }
+    }
+
+    for (int i = 0; i < launched; i++)
+        thrd_join(threads[i], NULL);
+
+    int first = 1;
+    for (int i = 0; i < nchunks; i++) {
+        size_t csz = works[i].result.sz;
+        size_t uc = works[i].n;
+
+        if (csz == 0) {
+            free(works[i].result.d);
+            continue;
+        }
+
+        int is_store = (works[i].result.d[0] == 0);
+
+        if (is_store) {
+            if (first) bp(out, 1); else bp(out, 2);
+            bp(out, (unsigned char)(uc >> 8));
+            bp(out, (unsigned char)uc);
+            for (size_t j = 0; j < uc; j++) bp(out, works[i].src[j]);
+        } else {
+            unsigned cc = (unsigned)(csz);
+            unsigned char ctrl;
+            if (first) {
+                ctrl = (unsigned char)(0x80 | ((uc >> 16) & 0x1F));
+                bp(out, ctrl);
+                bp(out, (unsigned char)lzma_props);
+            } else {
+                ctrl = (unsigned char)(0x40 | ((uc >> 16) & 0x1F));
+                bp(out, ctrl);
+            }
+            bp(out, (unsigned char)(uc >> 8));
+            bp(out, (unsigned char)uc);
+            bp(out, (unsigned char)(cc >> 8));
+            bp(out, (unsigned char)cc);
+            for (size_t j = 0; j < csz; j++) bp(out, works[i].result.d[j]);
+        }
+        free(works[i].result.d);
+        first = 0;
+    }
+
+    bp(out, 0); bp(out, 0);
+    free(works); free(threads);
+    return 0;
 }
 
 static size_t rle_size(const unsigned char *d, size_t n) {
@@ -173,58 +621,40 @@ static void rle_enc(const unsigned char *d, size_t n, Bf *out) {
     }
 }
 
-static void huf_build(int *freq, int nsym, unsigned char *len) {
-    int nz[256], nn = 0;
-    for (int i = 0; i < nsym; i++) if (freq[i] > 0) nz[nn++] = i;
-    if (nn <= 1) { if (nn == 1) len[nz[0]] = 1; return; }
-    int val[256], id[256];
-    for (int i = 0; i < nn; i++) { val[i] = freq[nz[i]]; id[i] = i; }
-    int par[512], ni = nn;
-    for (int i = 0; i < nn; i++) par[i] = -1;
-    int na = nn;
-    while (na > 1) {
-        int a = 0, b = 1;
-        if (val[b] < val[a]) { int t = a; a = b; b = t; }
-        for (int i = 2; i < na; i++) {
-            if (val[i] < val[a]) { b = a; a = i; }
-            else if (val[i] < val[b]) b = i;
-        }
-        int p = ni++;
-        par[id[a]] = p; par[id[b]] = p; par[p] = -1;
-        val[a] += val[b]; id[a] = p;
-        val[b] = val[--na]; id[b] = id[na];
+static void cmp(const unsigned char *in, size_t n, Bf *out) {
+    if (!n) { bp(out, 0); return; }
+    size_t sv = out->sz;
+
+    if (n > 8 && rle_size(in, n) < n) { rle_enc(in, n, out); return; }
+
+    unsigned char *tx = e8e9(in, n);
+    const unsigned char *src = tx ? tx : in;
+    int e8 = tx ? 1 : 0;
+
+    uint32_t dict_size = n < (1 << 18) ? (uint32_t)(n + n/2) : (1 << 23);
+    if (dict_size < (1 << 12)) dict_size = 1 << 12;
+    if (dict_size > (1 << 23)) dict_size = 1 << 23;
+
+    Bf lzma2_data = {0};
+    lzma2_encode(src, n, &lzma2_data, dict_size);
+
+    if (lzma2_data.sz < n) {
+        bp(out, (unsigned char)(e8 ? 7 : 6));
+        for (size_t i = 0; i < lzma2_data.sz; i++) bp(out, lzma2_data.d[i]);
+        free(lzma2_data.d);
+        if (tx) free(tx);
+        return;
     }
-    for (int i = 0; i < nn; i++) {
-        int d = 0, n = i;
-        while (par[n] >= 0) { d++; n = par[n]; }
-        len[nz[i]] = (unsigned char)(d ? d : 1);
-    }
-}
+    free(lzma2_data.d);
 
-static void huf_canon(const unsigned char *len, int nsym, unsigned short *code) {
-    int cnt[16] = {0};
-    int ml = 0;
-    for (int i = 0; i < nsym; i++) { int l = len[i]; if (l > 0) { cnt[l]++; if (l > ml) ml = l; } }
-    unsigned short fc[17] = {0};
-    for (int l = 1; l <= ml; l++) fc[l] = (fc[l-1] + cnt[l-1]) << 1;
-    for (int i = 0; i < nsym; i++) if (len[i] > 0) { code[i] = fc[len[i]]++; }
-}
-
-static void huf_store(Bf *out, const unsigned char *len, int nsym) {
-    int cnt[16] = {0}, ml = 0;
-    for (int i = 0; i < nsym; i++) if (len[i] > 0) { int l = len[i]; if (l > ml) ml = l; cnt[l-1]++; }
-    bp(out, (unsigned char)ml);
-    for (int i = 0; i < ml; i++) bp(out, (unsigned char)cnt[i]);
-    for (int l = 1; l <= ml; l++) for (int i = 0; i < nsym; i++) if (len[i] == l) bp(out, (unsigned char)i);
-}
-
-static void lz77_std(const unsigned char *src, size_t n, Bf *out) {
-    hr();
+    size_t pre = out->sz;
+    bp(out, (unsigned char)(e8 ? 2 : 1));
+    ms_reset(&g_ms);
     size_t pos = 0, fp = 0, rp0 = 0, rp1 = 0, rp2 = 0;
     unsigned char f = 0; int bit = 0;
     bp(out, 0); fp = out->sz - 1;
     while (pos < n) {
-        int ml, mo = mtch(src, pos, n, &ml);
+        int ml, mo = mtch(&g_ms, src, n, pos, &ml);
         if (mo > 0) {
             int rp = -1;
             if ((size_t)mo == rp0) rp = 0;
@@ -259,128 +689,10 @@ static void lz77_std(const unsigned char *src, size_t n, Bf *out) {
         }
     }
     if (bit) { out->d[fp] = f; } else out->sz--;
-}
+    if (out->sz - pre < n) { if (tx) free(tx); return; }
+    out->sz = pre;
+    free(tx);
 
-static void lz77_huf(const unsigned char *src, size_t n, Bf *out) {
-    int tok_freq[5] = {0};
-    int lit_freq[4][256] = {{0}};
-    hr();
-    {
-        size_t pos = 0; size_t rp0 = 0, rp1 = 0, rp2 = 0;
-        while (pos < n) {
-            int ml, mo = mtch(src, pos, n, &ml);
-            if (mo > 0) {
-                int rp = -1;
-                if ((size_t)mo == rp0) rp = 1;
-                else if ((size_t)mo == rp1) rp = 2;
-                else if ((size_t)mo == rp2) rp = 3;
-                if (rp >= 1) { tok_freq[rp]++;
-                    if (rp == 1) {}
-                    else if (rp == 2) { size_t t = rp0; rp0 = rp1; rp1 = t; }
-                    else if (rp == 3) { size_t t = rp2; rp2 = rp1; rp1 = rp0; rp0 = t; }
-                } else { tok_freq[4]++; rp2 = rp1; rp1 = rp0; rp0 = (size_t)mo; }
-                pos += (size_t)ml;
-            } else { tok_freq[0]++; lit_freq[pos & 3][src[pos]]++; pos++; }
-        }
-    }
-
-    unsigned char tok_len[5] = {0}; unsigned short tok_code[5] = {0};
-    unsigned char lit_len[4][256] = {{0}}; unsigned short lit_code[4][256] = {{0}};
-    huf_build(tok_freq, 5, tok_len);
-    huf_canon(tok_len, 5, tok_code);
-    for (int s = 0; s < 4; s++) {
-        huf_build(lit_freq[s], 256, lit_len[s]);
-        huf_canon(lit_len[s], 256, lit_code[s]);
-    }
-
-    unsigned char vlb[16]; size_t vn;
-    vn = vle(vlb, n); for (size_t vi = 0; vi < vn; vi++) bp(out, vlb[vi]);
-    huf_store(out, tok_len, 5);
-    for (int s = 0; s < 4; s++) huf_store(out, lit_len[s], 256);
-
-    Bbuf bb; bb_init(&bb);
-    Bbuf bb_lit[4]; for (int s = 0; s < 4; s++) bb_init(&bb_lit[s]);
-    hr();
-    {
-        size_t pos = 0; size_t rp0 = 0, rp1 = 0, rp2 = 0;
-        while (pos < n) {
-            int ml, mo = mtch(src, pos, n, &ml);
-            if (mo > 0) {
-                int rp = -1;
-                if ((size_t)mo == rp0) rp = 1;
-                else if ((size_t)mo == rp1) rp = 2;
-                else if ((size_t)mo == rp2) rp = 3;
-                if (rp >= 1) {
-                    bb_bits(&bb, tok_code[rp], tok_len[rp]);
-                    unsigned lv = (unsigned)(ml - MINM);
-                    if (lv < 255) { bb_bits(&bb, lv, 8); }
-                    else { bb_bits(&bb, 255, 8); bb_vli(&bb, lv - 255); }
-                    if (rp == 1) {}
-                    else if (rp == 2) { size_t t = rp0; rp0 = rp1; rp1 = t; }
-                    else if (rp == 3) { size_t t = rp2; rp2 = rp1; rp1 = rp0; rp0 = t; }
-                } else {
-                    bb_bits(&bb, tok_code[4], tok_len[4]);
-                    unsigned lv = (unsigned)(ml - MINM);
-                    if (lv < 255) { bb_bits(&bb, lv, 8); }
-                    else { bb_bits(&bb, 255, 8); bb_vli(&bb, lv - 255); }
-                    unsigned moff = (unsigned)mo;
-                    while (1) {
-                        bb_bits(&bb, (unsigned)(moff & 0x7F) | (moff >= 128 ? 0x80 : 0), 8);
-                        moff >>= 7;
-                        if (!moff) break;
-                    }
-                    rp2 = rp1; rp1 = rp0; rp0 = (size_t)mo;
-                }
-                pos += (size_t)ml;
-            } else {
-                bb_bits(&bb, tok_code[0], tok_len[0]);
-                unsigned char b = src[pos];
-                int s = pos & 3;
-                bb_bits(&bb_lit[s], lit_code[s][b], lit_len[s][b]);
-                pos++;
-            }
-        }
-    }
-    size_t nb = ((size_t)bb.pos + 7) / 8;
-    size_t nb_lit[4];
-    for (int s = 0; s < 4; s++) nb_lit[s] = ((size_t)bb_lit[s].pos + 7) / 8;
-    size_t jump[4]; jump[0] = nb;
-    for (int s = 1; s < 4; s++) jump[s] = jump[s-1] + nb_lit[s-1];
-    for (int s = 0; s < 4; s++) bp(out, (unsigned char)(jump[s] & 0xFF));
-    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 8) & 0xFF));
-    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 16) & 0xFF));
-    for (int s = 0; s < 4; s++) bp(out, (unsigned char)((jump[s] >> 24) & 0xFF));
-    for (size_t i = 0; i < nb; i++) bp(out, bb.d[i]);
-    for (int s = 0; s < 4; s++) {
-        for (size_t i = 0; i < nb_lit[s]; i++) bp(out, bb_lit[s].d[i]);
-    }
-    bb_free(&bb);
-    for (int s = 0; s < 4; s++) bb_free(&bb_lit[s]);
-}
-
-static void cmp(const unsigned char *in, size_t n, Bf *out) {
-    if (!n) { bp(out, 0); return; }
-    size_t sv = out->sz;
-    if (n > 8 && rle_size(in, n) < n) { rle_enc(in, n, out); return; }
-    int doit = cmpbl(in, n) ? 1 : 0;
-    if (doit) {
-        unsigned char *tx = e8e9(in, n);
-        const unsigned char *src = tx ? tx : in;
-        int e8 = tx ? 1 : 0;
-        if (n > 4000) {
-            size_t pre = out->sz;
-            bp(out, (unsigned char)(e8 ? 5 : 4));
-            lz77_huf(src, n, out);
-            if (out->sz - pre < n) { free(tx); return; }
-            out->sz = pre;
-        }
-        size_t pre = out->sz;
-        bp(out, (unsigned char)(e8 ? 2 : 1));
-        lz77_std(src, n, out);
-        if (out->sz - pre < n) { free(tx); return; }
-        out->sz = pre;
-        free(tx);
-    }
     out->sz = sv; bp(out, 0);
     for (size_t i = 0; i < n; i++) bp(out, in[i]);
 }
@@ -431,7 +743,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
     if (!o) return 1;
-    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
+    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <threads.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
     fputs("#define M 3\n", o);
     fputs("static const unsigned char D[]={", o);
     b85e_arr(o, cd, cs[0]);
@@ -460,16 +772,35 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("static size_t rd_vl(const unsigned char*d,size_t*p){size_t v=0,s=0;unsigned char c;\n", o);
     fputs("do{c=d[(*p)++];v|=(size_t)(c&0x7F)<<s;s+=7;}while(c&0x80);return v;}\n", o);
 
-    fputs("static size_t rd_vlb(const unsigned char*d,size_t*bp){size_t v=0,s=0;int i;unsigned char c;\n", o);
-    fputs("do{c=0;for(i=0;i<8;i++)c=(c<<1)|((d[*bp/8]>>(*bp%8))&1);(*bp)+=8;\n", o);
-    fputs("v|=(size_t)(c&0x7F)<<s;s+=7;}while(c&0x80);return v;}\n", o);
-
+    fputs("#define kTop ((unsigned)1<<24)\n", o);
+    fputs("typedef struct{unsigned r,c;const unsigned char*b;size_t*p;}RC;\n", o);
+    fputs("static int rc_init(RC*rc,const unsigned char*b,size_t*p){\n", o);
+    fputs("rc->r=0xFFFFFFFF;rc->c=0;rc->b=b;rc->p=p;\n", o);
+    fputs("unsigned char z=rc->b[(*p)++];\n", o);
+    fputs("for(int i=0;i<4;i++)rc->c=(rc->c<<8)|rc->b[(*p)++];\n", o);
+    fputs("return z==0;}\n", o);
+    fputs("static void rc_n(RC*rc){\n", o);
+    fputs("while(rc->r<kTop){rc->r<<=8;rc->c=(rc->c<<8)|rc->b[(*rc->p)++];}}\n", o);
+    fputs("static int rc_b(RC*rc,unsigned short*pr){\n", o);
+    fputs("unsigned v=*pr;unsigned b=(rc->r>>11)*v;\n", o);
+    fputs("int s;if(rc->c<b){v+=((1<<11)-v)>>5;rc->r=b;s=0;\n", o);
+    fputs("}else{v-=v>>5;rc->c-=b;rc->r-=b;s=1;}*pr=(unsigned short)v;rc_n(rc);return s;}\n", o);
+    fputs("static unsigned rc_d(RC*rc,unsigned n){\n", o);
+    fputs("unsigned r=0;for(unsigned i=0;i<n;i++){\n", o);
+    fputs("rc->r>>=1;unsigned t=(rc->c-rc->r)>>31;rc->c-=rc->r&t;rc_n(rc);r=(r<<1)|(t+1);}return r;}\n", o);
+    fputs("static int rc_bt(RC*rc,unsigned short*p,int n){\n", o);
+    fputs("int m=1;for(int i=0;i<n;i++)m=(m<<1)+rc_b(rc,p+m);return m-(1<<n);}\n", o);
+    fputs("static int rc_br(RC*rc,unsigned short*p,int n){\n", o);
+    fputs("int m=1,s=0;for(int i=0;i<n;i++){int b=rc_b(rc,p+m);m=(m<<1)+b;s|=b<<i;}return s;}\n", o);
+    fputs("static unsigned short PIV=2048/2;\n", o);
     fputs("static int rd_bit(const unsigned char*d,size_t*bp){\n", o);
     fputs("int r=(d[*bp/8]>>(*bp%8))&1;(*bp)++;return r;}\n", o);
     fputs("static int rd_bits(const unsigned char*d,size_t*bp,int n){\n", o);
     fputs("int v=0,i;for(i=0;i<n;i++)v=(v<<1)|rd_bit(d,bp);return v;}\n", o);
-    fputs("static int rd_huf(const unsigned char*d,size_t*bp,const int*cnt,\n", o);
-    fputs("   const unsigned char*sym,int ml){\n", o);
+    fputs("static size_t rd_vlb(const unsigned char*d,size_t*bp){size_t v=0,s=0;int i;unsigned char c;\n", o);
+    fputs("do{c=0;for(i=0;i<8;i++)c=(c<<1)|((d[*bp/8]>>(*bp%8))&1);(*bp)+=8;\n", o);
+    fputs("v|=(size_t)(c&0x7F)<<s;s+=7;}while(c&0x80);return v;}\n", o);
+    fputs("static int rd_huf(const unsigned char*d,size_t*bp,const int*cnt,const unsigned char*sym,int ml){\n", o);
     fputs("unsigned c=0;int i=0,fc=0;\n", o);
     fputs("for(int l=0;l<ml;l++){c=(c<<1)|rd_bit(d,bp);\n", o);
     fputs("int cc=cnt[l];if(cc>0&&(int)(c-fc)<cc)return sym[i+(c-fc)];\n", o);
@@ -480,6 +811,122 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("for(j=0;j<tot;j++)sym[j]=*(*p)++;\n", o);
     fputs("while(ml>0&&!cnt[ml-1])ml--;return ml>0?ml:1;}\n", o);
 
+    fputs("static size_t lzma2_d(const unsigned char*in,size_t n,unsigned char*out){\n", o);
+    fputs("size_t p=0,op=0;\n", o);
+    fputs("while(p<n){\n", o);
+    fputs("unsigned ctl=in[p++];\n", o);
+    fputs("if(ctl==0)break;\n", o);
+    fputs("if(ctl==1||ctl==2){\n", o);
+    fputs("unsigned sz=(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
+    fputs("memcpy(out+op,in+p,sz);p+=sz;op+=sz;continue;}\n", o);
+
+    fputs("unsigned props=0,uc_hi=0;\n", o);
+    fputs("if(ctl&0x80){props=in[p++];}\n", o);
+    fputs("uc_hi=(ctl&0x1F)<<16;\n", o);
+    fputs("unsigned uc=uc_hi|(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
+    fputs("unsigned cc=(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
+
+    fputs("unsigned lc=3,lp=0,pb=2;\n", o);
+    fputs("if(ctl&0x80){unsigned d=props;lc=d%9;d/=9;pb=d/5;lp=d%5;}\n", o);
+
+    fputs("RC rc;rc_init(&rc,in,&p);\n", o);
+    fputs("size_t pc=1846+768*(1<<(lp+lc));unsigned short*pr=calloc(pc,2);\n", o);
+    fputs("if(!pr)return -1;\n", o);
+    fputs("for(size_t i=0;i<pc;i++)pr[i]=PIV;\n", o);
+
+    fputs("unsigned short*im=pr;\n", o);
+    fputs("unsigned short*ir=im+(12<<4);\n", o);
+    fputs("unsigned short*ir0=ir+12;\n", o);
+    fputs("unsigned short*ir1=ir0+12;\n", o);
+    fputs("unsigned short*ir2=ir1+12;\n", o);
+    fputs("unsigned short*irl=ir2+12;\n", o);
+    fputs("unsigned short*ps=irl+(12<<4);\n", o);
+    fputs("unsigned short*pd=ps+(4<<6);\n", o);
+    fputs("unsigned short*pa=pd+(1+((1<<(14>>1))-14));\n", o);
+    fputs("unsigned short*lc0=pa+(1<<4);\n", o);
+    fputs("unsigned short*lc1=lc0+1;\n", o);
+    fputs("unsigned short*ll=lc1+1;\n", o);
+    fputs("unsigned short*lm=ll+(1<<4)*(1<<3);\n", o);
+    fputs("unsigned short*lh=lm+(1<<4)*(1<<3);\n", o);
+    fputs("unsigned short*rc0=lh+(1<<8);\n", o);
+    fputs("unsigned short*rc1=rc0+1;\n", o);
+    fputs("unsigned short*rl=rc1+1;\n", o);
+    fputs("unsigned short*rm=rl+(1<<4)*(1<<3);\n", o);
+    fputs("unsigned short*rh=rm+(1<<4)*(1<<3);\n", o);
+    fputs("unsigned short*lp0=rh+(1<<8);\n", o);
+
+    fputs("unsigned sr=0;\n", o);
+    fputs("unsigned r0=0,r1=0,r2=0,r3=0;\n", o);
+    fputs("size_t ep=0;\n", o);
+    fputs("while(ep<uc){\n", o);
+    fputs("unsigned ps2=ep&((1<<pb)-1);\n", o);
+    fputs("unsigned st2=(sr<<4)|ps2;\n", o);
+    fputs("if(!rc_b(&rc,&im[st2])){\n", o);
+    fputs("unsigned lb=ep>0?out[ep-1]:0;\n", o);
+    fputs("unsigned ls=((ep&((1<<lp)-1))<<lc)|(lb>>(8-lc));\n", o);
+    fputs("unsigned short*lp2=lp0+0x300*ls;\n", o);
+    fputs("if(sr>=7){\n", o);
+    fputs("unsigned mb=out[ep-r0-1];\n", o);
+    fputs("int sy=1;\n", o);
+    fputs("while(sy<256){\n", o);
+    fputs("int mbit=(mb>>7)&1;mb<<=1;\n", o);
+    fputs("int bit=rc_b(&rc,&lp2[((1+mbit)<<8)+sy]);\n", o);
+    fputs("sy=(sy<<1)|bit;if(mbit!=bit)break;}\n", o);
+    fputs("while(sy<256)sy=(sy<<1)|rc_b(&rc,&lp2[sy]);\n", o);
+    fputs("out[ep++]=(unsigned char)(sy-256);\n", o);
+    fputs("}else{\n", o);
+    fputs("int sy=1;while(sy<256)sy=(sy<<1)|rc_b(&rc,&lp2[sy]);\n", o);
+    fputs("out[ep++]=(unsigned char)(sy-256);}\n", o);
+    fputs("if(sr<4)sr=0;else if(sr<10)sr-=3;else sr-=6;\n", o);
+    fputs("}else{\n", o);
+    fputs("if(!rc_b(&rc,&ir[sr])){\n", o);
+    fputs("int L=rc_b(&rc,&lc0[0]);\n", o);
+    fputs("if(L==0)L=rc_bt(&rc,ll+(ps2<<3),3);\n", o);
+    fputs("else{\n", o);
+    fputs("L=rc_b(&rc,&lc1[0]);\n", o);
+    fputs("if(L==0)L=8+rc_bt(&rc,lm+(ps2<<3),3);\n", o);
+    fputs("else L=16+rc_bt(&rc,lh,8);}\n", o);
+    fputs("r3=r2;r2=r1;r1=r0;\n", o);
+    fputs("unsigned ls2=L;if(ls2>3)ls2=3;\n", o);
+    fputs("unsigned ps2v=rc_bt(&rc,ps+(ls2<<6),6);\n", o);
+    fputs("if(ps2v<4)r0=ps2v;\n", o);
+    fputs("else{\n", o);
+    fputs("unsigned nd=(ps2v>>1)-1;\n", o);
+    fputs("unsigned d0=((2|(ps2v&1))<<nd);\n", o);
+    fputs("if(ps2v<14)r0=d0+rc_br(&rc,pd+d0-ps2v,nd);\n", o);
+    fputs("else r0=d0+(rc_d(&rc,nd-4)<<4)+rc_br(&rc,pa,4);}\n", o);
+    fputs("sr=sr<7?7:10;\n", o);
+    fputs("L+=2;\n", o);
+    fputs("for(int j=0;j<L;j++)out[ep+j]=out[ep+j-r0];ep+=L;\n", o);
+    fputs("}else{\n", o);
+    fputs("int ri;\n", o);
+    fputs("if(!rc_b(&rc,&ir0[sr])){\n", o);
+    fputs("ri=0;\n", o);
+    fputs("if(!rc_b(&rc,&irl[st2])){\n", o);
+    fputs("out[ep]=out[ep-r0];ep++;\n", o);
+    fputs("sr=sr<7?9:11;continue;}\n", o);
+    fputs("}else{\n", o);
+    fputs("ri=1+rc_b(&rc,&ir1[sr]);\n", o);
+    fputs("if(ri==2)ri+=rc_b(&rc,&ir2[sr]);}\n", o);
+    fputs("int L=rc_b(&rc,&rc0[0]);\n", o);
+    fputs("if(L==0)L=rc_bt(&rc,rl+(ps2<<3),3);\n", o);
+    fputs("else{\n", o);
+    fputs("L=rc_b(&rc,&rc1[0]);\n", o);
+    fputs("if(L==0)L=8+rc_bt(&rc,rm+(ps2<<3),3);\n", o);
+    fputs("else L=16+rc_bt(&rc,rh,8);}\n", o);
+    fputs("unsigned d;\n", o);
+    fputs("if(ri==0)d=r0;\n", o);
+    fputs("else if(ri==1){d=r1;r1=r0;r0=d;}\n", o);
+    fputs("else if(ri==2){d=r2;r2=r1;r1=r0;r0=d;}\n", o);
+    fputs("else{d=r3;r3=r2;r2=r1;r1=r0;r0=d;}\n", o);
+    fputs("sr=sr<7?8:11;\n", o);
+    fputs("L+=2;\n", o);
+    fputs("for(int j=0;j<L;j++)out[ep+j]=out[ep+j-d];ep+=L;\n", o);
+    fputs("}}}\n", o);
+
+    fputs("free(pr);\n", o);
+    fputs("}return op;}\n", o);
+
     fputs("static void lz(const unsigned char*i,size_t n,unsigned char*e){\n", o);
     fputs("int flg=i[0];\n", o);
     fputs("if(flg==0){memcpy(e,i+1,n-1);return;}\n", o);
@@ -487,9 +934,10 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("size_t us=rd_vl(i,&p),e2=0;\n", o);
     fputs("while(e2<us){unsigned char b=i[p++];size_t r=rd_vl(i,&p);\n", o);
     fputs("memset(e+e2,b,r);e2+=r;}return;}\n", o);
+    fputs("if(flg>=6){lzma2_d(i+1,n-1,e);if(flg&1)x86(e,n);return;}\n", o);
     fputs("int e8=flg==2||flg==5;size_t p=1,q=0,r0=0,r1=0,r2=0;\n", o);
 
-fputs("if(flg>=4){\n", o);
+    fputs("if(flg>=4){\n", o);
     fputs("size_t us=rd_vl(i,&p);\n", o);
     fputs("int tc[16]={0};unsigned char ts[5];\n", o);
     fputs("int lc[4][16]={{0}};unsigned char ls[4][256];\n", o);
@@ -536,17 +984,34 @@ fputs("if(flg>=4){\n", o);
     fputs("if(last){*last=0;mkdir(p,0777);*last='/';}\n", o);
     fputs("free(p);return 0;}\n", o);
 
+    fputs("typedef struct{unsigned char*d;int a;int z;}EJ;\n", o);
+    fputs("static int xt(void*p){EJ*j=p;int i;\n", o);
+    fputs("size_t o=0;for(i=0;i<j->a;i++)o+=S[i];\n", o);
+    fputs("for(i=j->a;i<j->z;i++){\n", o);
+    fputs("FILE*f=fopen(N[i],\"wb\");if(!f)return 1;\n", o);
+    fputs("fwrite(j->d+o,1,S[i],f);fclose(f);o+=S[i];puts(N[i]);}return 0;}\n", o);
+
     fprintf(o, "int main(void){\nsize_t i,ts=0;\n");
     for (int i = 0; i < nf; i++) fprintf(o, "ts+=S[%d];\n", i);
     fputs("unsigned char*b=malloc(ts);if(!b)return 1;\n", o);
     fprintf(o, "size_t cl=(C+3)/4*4;\n");
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
-    fputs("size_t off=0;\nfor(i=0;i<(size_t)F;i++){\n", o);
-    fputs("mkpath(N[i]);\n", o);
-    fputs("FILE*f=fopen(N[i],\"wb\");if(!f){free(b);return 1;}\n", o);
-    fputs("fwrite(b+off,1,S[i],f);fclose(f);off+=S[i];puts(N[i]);}\n", o);
-    fputs("free(b);\nreturn 0;}\n", o);
+    fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
+    fputs("long nh=1;\n", o);
+#ifdef _SC_NPROCESSORS_ONLN
+    fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);
+    fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
+    fputs("#endif\n", o);
+#endif
+    fputs("int nt=(int)nh;if(nt<1)nt=1;\n", o);
+    fputs("if(nt>F)nt=F;thrd_t*tt=malloc((size_t)nt*sizeof(thrd_t));\n", o);
+    fputs("EJ*mj=malloc((size_t)nt*sizeof(EJ));\n", o);
+    fputs("int cpf=F/nt;for(i=0;i<nt;i++){\n", o);
+    fputs("mj[i].d=b;mj[i].a=i*cpf;mj[i].z=i==nt-1?F:(i+1)*cpf;\n", o);
+    fputs("thrd_create(&tt[i],xt,&mj[i]);}\n", o);
+    fputs("for(i=0;i<nt;i++)thrd_join(tt[i],NULL);\n", o);
+    fputs("free(tt);free(mj);free(b);return 0;}\n", o);
     fclose(o);
     return 0;
 }

@@ -4,5 +4,6 @@ extract
 test_extract
 *.o
 RELEASE_NOTES.md
+tmp/
 test/work/
 test/output/

@@ -17,14 +17,17 @@ The resulting C file is compiled and executed to reproduce the original files.
 
 ## How it works
 
-1. **LZ77 compression** with a brute-force match finder scanning an 8KB window
-2. **Base85 encoding** of the compressed stream using a C-string-safe alphabet (avoids `"` and `\`)
-3. The decoder (`lz` + `b8`) is embedded in the generated C file
+1. **LZMA2 compression** with a range-coded, probability-model entropy coder and multithreaded chunked encoding
+2. Legacy fallback: **LZ77/LZ78** match-finder for data where LZMA2 would expand
+3. **Base85 encoding** of the compressed stream using a C-string-safe alphabet (avoids `"` and `\`)
+4. The decoder (`lz` + `b8`) is embedded in the generated C file alongside a threaded file extractor
+
+The generated archive decompresses and extracts files using **multiple threads** via C11 `<threads.h>`.
 
 ## Requirements
 
-- A C99 compiler (GCC, Clang, MSVC, TinyCC)
-- The generated archive is valid C++ for interpreter support (Cling, Cint)
+- A C23 compiler (GCC, Clang) for the compressor
+- The generated archive requires C11 `<threads.h>` support and compiles under C++ as well
 
 ## Building
 

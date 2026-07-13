@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -Wextra -pedantic -std=c99 -O2 -march=native -D_POSIX_C_SOURCE=200809L
+CFLAGS = -Wall -Wextra -pedantic -std=c23 -O3 -ffast-math -march=native -D_POSIX_C_SOURCE=200809L
 LDFLAGS =
 
 TARGET = ccompress
