@@ -50,26 +50,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > release-notes.md <<EOF
-# Argo ${{ steps.tag.outputs.name }}
-
-Self-extracting C archive containing the ccompress source.
-
-## Changes
-
-- LZMA2 compression with range-coded entropy coding and 11-bit probability models
-- Multithreaded chunked encoding via C11 threads
-- Multithreaded file extraction in the generated archive
-- Legacy LZ77/LZ78 fallback for incompressible data
-
-## Usage
-
-\`\`\`
-cc -o extract Argo.c && ./extract
-\`\`\`
-
-Produces: compress.c, Makefile, README.md
-EOF
+          echo "# Argo ${{ steps.tag.outputs.name }}" > release-notes.md
+          echo "" >> release-notes.md
+          echo "Self-extracting C archive containing the ccompress source." >> release-notes.md
+          echo "" >> release-notes.md
+          echo "## Changes" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "- LZMA2 compression with range-coded entropy coding and 11-bit probability models" >> release-notes.md
+          echo "- Multithreaded chunked encoding via C11 threads" >> release-notes.md
+          echo "- Multithreaded file extraction in the generated archive" >> release-notes.md
+          echo "- Legacy LZ77/LZ78 fallback for incompressible data" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "## Usage" >> release-notes.md
+          echo "" >> release-notes.md
+          echo '```' >> release-notes.md
+          echo "cc -o extract Argo.c && ./extract" >> release-notes.md
+          echo '```' >> release-notes.md
+          echo "" >> release-notes.md
+          echo "Produces: compress.c, Makefile, README.md" >> release-notes.md
           gh release upload "${{ steps.tag.outputs.name }}" Argo.c --clobber \
             --repo "${{ github.repository }}" || {
             gh release create "${{ steps.tag.outputs.name }}" Argo.c \
