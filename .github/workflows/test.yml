@@ -32,6 +32,7 @@ jobs:
       - name: Compile Argo.c with MSVC
         run: cl Argo.c /FeArgo.exe
       - name: Extract and verify
+        shell: cmd
         run: |
           mkdir extract_test
           copy compress.c Makefile README.md extract_test\
