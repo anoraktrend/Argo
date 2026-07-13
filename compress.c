@@ -744,8 +744,17 @@ static int gen(const char *path, const char **fn, size_t *fl,
     FILE *o = fopen(path, "w");
     if (!o) return 1;
     fputs("// cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract\n", o);
-    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
+    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n", o);
+    fputs("#if defined(_MSC_VER)\n", o);
+    fputs("#include <windows.h>\n#include <direct.h>\n#define MKDIR(p) _mkdir(p)\n#define strdup _strdup\n", o);
+    fputs("typedef HANDLE pthread_t;\n", o);
+    fputs("static int pthread_create(pthread_t *t, void *a, void *(*f)(void*), void *d){\n", o);
+    fputs("*t=CreateThread(NULL,0,(LPTHREAD_START_ROUTINE)f,d,0,NULL);return *t?0:-1;}\n", o);
+    fputs("static int pthread_join(pthread_t t, void **r){\n", o);
+    fputs("WaitForSingleObject(t,INFINITE);CloseHandle(t);return 0;}\n", o);
+    fputs("#else\n#include <pthread.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
     fputs("#ifdef _WIN32\n#include <direct.h>\n#define MKDIR(p) _mkdir(p)\n#else\n#define MKDIR(p) mkdir(p,0777)\n#endif\n", o);
+    fputs("#endif\n", o);
     fputs("#define M 3\n", o);
     fputs("static const unsigned char D[]={", o);
     b85e_arr(o, cd, cs[0]);
@@ -1001,11 +1010,12 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
     fputs("long nh=1;\n", o);
-#ifdef _SC_NPROCESSORS_ONLN
     fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);
     fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
     fputs("#endif\n", o);
-#endif
+    fputs("#ifdef _MSC_VER\n", o);
+    fputs("{SYSTEM_INFO si;GetSystemInfo(&si);nh=(long)si.dwNumberOfProcessors;}\n", o);
+    fputs("#endif\n", o);
     fputs("size_t nt=nh>0?(size_t)nh:1;\n", o);
     fputs("if(nt>F)nt=F;pthread_t*tt=malloc(nt*sizeof(pthread_t));\n", o);
     fputs("EJ*mj=malloc(nt*sizeof(EJ));\n", o);
