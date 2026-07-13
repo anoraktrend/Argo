@@ -25,7 +25,7 @@ jobs:
         run: echo "name=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build ccompress
-        run: cc -Wall -Wextra -pedantic -std=c23 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
+        run: cc -Wall -Wextra -pedantic -std=c23 -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
 
       - name: Create self-extracting release archive
         run: |

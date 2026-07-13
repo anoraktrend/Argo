@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
-#include <threads.h>
+#include <pthread.h>
 #include <unistd.h>
 
 static int hw_threads(void) {
@@ -482,7 +482,7 @@ typedef struct {
     int ok;
 } LZMAWork;
 
-static int lzma_thread(void *arg) {
+static void *lzma_thread(void *arg) {
     LZMAWork *w = (LZMAWork *)arg;
     w->result = (Bf){0};
     Bf *o = &w->result;
@@ -490,25 +490,25 @@ static int lzma_thread(void *arg) {
         bp(o, 0);
         for (size_t i = 0; i < w->n; i++) bp(o, w->src[i]);
         w->ok = 1;
-        return 0;
+        return NULL;
     }
     Bf raw = {0};
     if (lzma_encode(w->src, w->n, &raw, w->lc, w->lp, w->pb) != 0) {
         free(raw.d);
         w->ok = 0;
-        return 0;
+        return NULL;
     }
     if (raw.sz >= w->n) {
         free(raw.d);
         bp(o, 0);
         for (size_t i = 0; i < w->n; i++) bp(o, w->src[i]);
         w->ok = 1;
-        return 0;
+        return NULL;
     }
     for (size_t i = 0; i < raw.sz; i++) bp(o, raw.d[i]);
     free(raw.d);
     w->ok = 1;
-    return 0;
+    return NULL;
 }
 
 static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t dict_size) {
@@ -526,7 +526,7 @@ static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t di
     if (nthreads < 1) nthreads = 1;
 
     LZMAWork *works = calloc((size_t)nchunks, sizeof(LZMAWork));
-    thrd_t *threads = calloc((size_t)nchunks, sizeof(thrd_t));
+    pthread_t *threads = calloc((size_t)nchunks, sizeof(pthread_t));
     size_t off = 0;
 
     for (int i = 0; i < nchunks; i++) {
@@ -541,7 +541,7 @@ static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t di
     int launched = 0;
     for (int i = 0; i < nchunks; i++) {
         if (i < nthreads && nchunks > 1) {
-            if (thrd_create(&threads[i], lzma_thread, &works[i]) == thrd_success)
+            if (pthread_create(&threads[i], NULL, lzma_thread, &works[i]) == 0)
                 launched++;
             else
                 lzma_thread(&works[i]);
@@ -551,7 +551,7 @@ static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t di
     }
 
     for (int i = 0; i < launched; i++)
-        thrd_join(threads[i], NULL);
+        pthread_join(threads[i], NULL);
 
     int first = 1;
     for (int i = 0; i < nchunks; i++) {
@@ -743,7 +743,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
     if (!o) return 1;
-    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <threads.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
+    fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
     fputs("#define M 3\n", o);
     fputs("static const unsigned char D[]={", o);
     b85e_arr(o, cd, cs[0]);
@@ -985,11 +985,11 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("free(p);return 0;}\n", o);
 
     fputs("typedef struct{unsigned char*d;int a;int z;}EJ;\n", o);
-    fputs("static int xt(void*p){EJ*j=p;int i;\n", o);
+    fputs("static void *xt(void*p){EJ*j=p;int i;\n", o);
     fputs("size_t o=0;for(i=0;i<j->a;i++)o+=S[i];\n", o);
     fputs("for(i=j->a;i<j->z;i++){\n", o);
-    fputs("FILE*f=fopen(N[i],\"wb\");if(!f)return 1;\n", o);
-    fputs("fwrite(j->d+o,1,S[i],f);fclose(f);o+=S[i];puts(N[i]);}return 0;}\n", o);
+    fputs("FILE*f=fopen(N[i],\"wb\");if(!f)return NULL;\n", o);
+    fputs("fwrite(j->d+o,1,S[i],f);fclose(f);o+=S[i];puts(N[i]);}return NULL;}\n", o);
 
     fprintf(o, "int main(void){\nsize_t i,ts=0;\n");
     for (int i = 0; i < nf; i++) fprintf(o, "ts+=S[%d];\n", i);
@@ -1005,12 +1005,12 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("#endif\n", o);
 #endif
     fputs("int nt=(int)nh;if(nt<1)nt=1;\n", o);
-    fputs("if(nt>F)nt=F;thrd_t*tt=malloc((size_t)nt*sizeof(thrd_t));\n", o);
+    fputs("if(nt>F)nt=F;pthread_t*tt=malloc((size_t)nt*sizeof(pthread_t));\n", o);
     fputs("EJ*mj=malloc((size_t)nt*sizeof(EJ));\n", o);
     fputs("int cpf=F/nt;for(i=0;i<nt;i++){\n", o);
     fputs("mj[i].d=b;mj[i].a=i*cpf;mj[i].z=i==nt-1?F:(i+1)*cpf;\n", o);
-    fputs("thrd_create(&tt[i],xt,&mj[i]);}\n", o);
-    fputs("for(i=0;i<nt;i++)thrd_join(tt[i],NULL);\n", o);
+    fputs("pthread_create(&tt[i],NULL,xt,&mj[i]);}\n", o);
+    fputs("for(i=0;i<nt;i++)pthread_join(tt[i],NULL);\n", o);
     fputs("free(tt);free(mj);free(b);return 0;}\n", o);
     fclose(o);
     return 0;
