@@ -74,7 +74,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: Argo.c
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
       - name: Compile Argo.c with MSVC
         run: cl Argo.c /FeArgo.exe
       - name: Extract and verify
