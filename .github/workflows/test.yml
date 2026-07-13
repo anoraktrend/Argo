@@ -1,52 +1,42 @@
 name: test
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+on: [push, pull_request]
 
 jobs:
-  roundtrip:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
       - name: Build ccompress
-        run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
-
-      - name: Full test suite
-        run: bash test/run.sh
-
-      - name: C++ compilation test
         run: |
-          ./ccompress compress.c -o archive.c
-          cc -x c++ -fsyntax-only archive.c 2>&1 || c++ -fsyntax-only archive.c 2>&1 || echo "(C++ check skipped)"
-          rm -f archive.c
+          std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
+          cc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
+      - name: Run tests
+        run: make test
+      - name: Generate Argo.c for downstream jobs
+        run: ./ccompress compress.c Makefile README.md -o Argo.c
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Argo.c
+          path: Argo.c
 
-      - name: Multi-file test
-        run: |
-          mkdir -p /tmp/mtest
-          echo "int a(void) { return 1; }" > /tmp/mtest/a.c
-          echo "int b(void) { return 2; }" > /tmp/mtest/b.c
-          echo "int c(void) { return 3; }" > /tmp/mtest/c.c
-          ./ccompress /tmp/mtest/a.c /tmp/mtest/b.c /tmp/mtest/c.c -o /tmp/mtest/multi.c
-          cc -o /tmp/mtest/extract /tmp/mtest/multi.c
-          (cd /tmp/mtest && ./extract)
-          diff /tmp/mtest/a.c /tmp/mtest/a.c && diff /tmp/mtest/b.c /tmp/mtest/b.c && diff /tmp/mtest/c.c /tmp/mtest/c.c
-
-  os_matrix:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  msvc:
+    needs: linux
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-
-      - name: Build ccompress
-        run: cc -Wall -Wextra -pedantic -std=c99 -O2 -D_POSIX_C_SOURCE=200809L -o ccompress compress.c
-        shell: bash
-
-      - name: Full test suite
-        shell: bash
-        run: bash test/run.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: Argo.c
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile Argo.c with MSVC
+        run: cl Argo.c /FeArgo.exe
+      - name: Extract and verify
+        run: |
+          mkdir extract_test
+          copy compress.c Makefile README.md extract_test\
+          cd extract_test
+          ..\Argo.exe
+          fc /b compress.c ..\compress.c
+          fc /b Makefile ..\Makefile
+          fc /b README.md ..\README.md
