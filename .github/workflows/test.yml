@@ -77,6 +77,18 @@ jobs:
       - uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
+      - name: Install make
+        run: choco install make -y --no-progress
+      - name: Build ccompress with MSVC
+        run: make CC=cl CFLAGS="/std:c17 /O2" LDFLAGS="" STD=
+      - name: Test ccompress with MSVC
+        run: |
+          $wc = 'int main(void) { printf("hello\n"); return 0; }'
+          Set-Content -Encoding ascii test_input.c $wc
+          .\ccompress test_input.c -o test_output.c
+          cl test_output.c /Fetest_extract
+          .\test_extract
+          Remove-Item test_input.c,test_output.c,test_extract.exe
       - name: Compile Argo.c with MSVC
         run: cl Argo.c /FeArgo.exe
       - name: Extract and verify
