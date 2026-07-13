@@ -755,7 +755,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     for (int i = 0; i < nf; i++) fprintf(o, "%zu,", os[i]);
     fputs("};\n", o);
     fprintf(o, "static const size_t C=%zu;\n", cs[0]);
-    fprintf(o, "static int F=%d;\n", nf);
+    fprintf(o, "static size_t F=%d;\n", nf);
     fputs("static void x86(unsigned char*d,size_t n){\n", o);
     fputs("for(size_t i=0;i+4<n;i++)\n", o);
     fputs("if((d[i]==0xE8||d[i]==0xE9)&&(d[i+4]==0||d[i+4]==0xFF)){\n", o);
@@ -824,7 +824,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("if(ctl&0x80){props=in[p++];}\n", o);
     fputs("uc_hi=(ctl&0x1F)<<16;\n", o);
     fputs("unsigned uc=uc_hi|(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
-    fputs("unsigned cc=(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
+    fputs("p+=2;\n", o);
 
     fputs("unsigned lc=3,lp=0,pb=2;\n", o);
     fputs("if(ctl&0x80){unsigned d=props;lc=d%9;d/=9;pb=d/5;lp=d%5;}\n", o);
@@ -984,8 +984,8 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("if(last){*last=0;mkdir(p,0777);*last='/';}\n", o);
     fputs("free(p);return 0;}\n", o);
 
-    fputs("typedef struct{unsigned char*d;int a;int z;}EJ;\n", o);
-    fputs("static void *xt(void*p){EJ*j=p;int i;\n", o);
+    fputs("typedef struct{unsigned char*d;size_t a;size_t z;}EJ;\n", o);
+    fputs("static void *xt(void*p){EJ*j=p;size_t i;\n", o);
     fputs("size_t o=0;for(i=0;i<j->a;i++)o+=S[i];\n", o);
     fputs("for(i=j->a;i<j->z;i++){\n", o);
     fputs("FILE*f=fopen(N[i],\"wb\");if(!f)return NULL;\n", o);
@@ -1004,10 +1004,10 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
     fputs("#endif\n", o);
 #endif
-    fputs("int nt=(int)nh;if(nt<1)nt=1;\n", o);
-    fputs("if(nt>F)nt=F;pthread_t*tt=malloc((size_t)nt*sizeof(pthread_t));\n", o);
-    fputs("EJ*mj=malloc((size_t)nt*sizeof(EJ));\n", o);
-    fputs("int cpf=F/nt;for(i=0;i<nt;i++){\n", o);
+    fputs("size_t nt=nh>0?(size_t)nh:1;\n", o);
+    fputs("if(nt>F)nt=F;pthread_t*tt=malloc(nt*sizeof(pthread_t));\n", o);
+    fputs("EJ*mj=malloc(nt*sizeof(EJ));\n", o);
+    fputs("size_t cpf=F/nt;for(i=0;i<nt;i++){\n", o);
     fputs("mj[i].d=b;mj[i].a=i*cpf;mj[i].z=i==nt-1?F:(i+1)*cpf;\n", o);
     fputs("pthread_create(&tt[i],NULL,xt,&mj[i]);}\n", o);
     fputs("for(i=0;i<nt;i++)pthread_join(tt[i],NULL);\n", o);

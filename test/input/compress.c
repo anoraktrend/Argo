@@ -213,7 +213,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("static const unsigned char*P[]={", o);
     for (int i = 0; i < nf; i++) fprintf(o, "D%d,", i);
     fputs("};\n", o);
-    fprintf(o, "static int F=%d;\n", nf);
+    fprintf(o, "static size_t F=%d;\n", nf);
     fputs("static void x86(unsigned char*d,size_t n){\n", o);
     fputs("for(size_t i=0;i+4<n;i++)\n", o);
     fputs("if((d[i]==0xE8||d[i]==0xE9)&&(d[i+4]==0||d[i+4]==0x00 |{\n", o);
