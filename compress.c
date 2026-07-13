@@ -744,6 +744,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     FILE *o = fopen(path, "w");
     if (!o) return 1;
     fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
+    fputs("#ifdef _WIN32\n#include <direct.h>\n#define MKDIR(p) _mkdir(p)\n#else\n#define MKDIR(p) mkdir(p,0777)\n#endif\n", o);
     fputs("#define M 3\n", o);
     fputs("static const unsigned char D[]={", o);
     b85e_arr(o, cd, cs[0]);
@@ -980,8 +981,8 @@ static int gen(const char *path, const char **fn, size_t *fl,
 
     fputs("static int mkpath(const char *path){\n", o);
     fputs("char *p=strdup(path),*s=p,*last=0;if(!p)return 1;\n", o);
-    fputs("for(;*s;s++)if(*s=='/'){last=s;*s=0;mkdir(p,0777);*s='/';}\n", o);
-    fputs("if(last){*last=0;mkdir(p,0777);*last='/';}\n", o);
+    fputs("for(;*s;s++)if(*s=='/'){last=s;*s=0;MKDIR(p);*s='/';}\n", o);
+    fputs("if(last){*last=0;MKDIR(p);*last='/';}\n", o);
     fputs("free(p);return 0;}\n", o);
 
     fputs("typedef struct{unsigned char*d;size_t a;size_t z;}EJ;\n", o);
