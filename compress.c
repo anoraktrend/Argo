@@ -1014,7 +1014,6 @@ static int gen(const char *path, const char **fn, size_t *fl,
 
     fputs("static int mkpath(const char *path){\n", o);
     fputs("char *p=strdup(path),*s=p,*last=0;if(!p)return 1;\n", o);
-    fputs("#ifdef _MSC_VER\nfor(;*s;s++)if(*s=='/')*s='\\\\';\n#endif\n", o);
     fputs("for(;*s;s++)if(*s=='/'){last=s;*s=0;MKDIR(p);*s='/';}\n", o);
     fputs("if(last){*last=0;MKDIR(p);*last='/';}\n", o);
     fputs("free(p);return 0;}\n", o);
