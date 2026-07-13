@@ -743,6 +743,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
     if (!o) return 1;
+    fputs("// cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract\n", o);
     fputs("#define _POSIX_C_SOURCE 200809L\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <pthread.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n", o);
     fputs("#ifdef _WIN32\n#include <direct.h>\n#define MKDIR(p) _mkdir(p)\n#else\n#define MKDIR(p) mkdir(p,0777)\n#endif\n", o);
     fputs("#define M 3\n", o);

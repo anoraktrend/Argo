@@ -69,6 +69,12 @@ jobs:
           echo "cc -o extract Argo.c && ./extract" >> release-notes.md
           echo '```' >> release-notes.md
           echo "" >> release-notes.md
+          echo "For smaller binaries:" >> release-notes.md
+          echo "" >> release-notes.md
+          echo '```' >> release-notes.md
+          echo "cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract" >> release-notes.md
+          echo '```' >> release-notes.md
+          echo "" >> release-notes.md
           echo "Produces: compress.c, Makefile, README.md" >> release-notes.md
           gh release upload "${{ steps.tag.outputs.name }}" Argo.c --clobber \
             --repo "${{ github.repository }}" || {

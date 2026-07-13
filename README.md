@@ -15,6 +15,12 @@ cc -o extract Argo.c && ./extract
 The compressor (`ccompress`) reads any number of input files and produces `Argo.c`.
 The resulting C file is compiled and executed to reproduce the original files.
 
+Recommended flags for the generated archive (produces smaller binaries):
+
+```sh
+cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract
+```
+
 ## How it works
 
 1. **LZMA2 compression** with a range-coded, probability-model entropy coder and multithreaded chunked encoding
