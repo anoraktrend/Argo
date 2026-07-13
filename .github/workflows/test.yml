@@ -12,7 +12,9 @@ jobs:
           std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
           cc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
       - name: Run tests
-        run: make test
+        run: |
+          make test
+          ./test/run.sh
       - name: Generate Argo.c for downstream jobs
         run: ./ccompress compress.c Makefile README.md -o Argo.c
       - uses: actions/upload-artifact@v7
