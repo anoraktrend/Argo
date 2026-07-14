@@ -1,4 +1,8 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Argo - Self-Extracting C Archives
+# Copyright (c) 2026 Lucy Ada Randall
+# See LICENSE file for full MIT license text.
 set -e
 CC="${CC:-cc}"
 PASS=0 FAIL=0

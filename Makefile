@@ -1,6 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Argo - Self-Extracting C Archives
+# Copyright (c) 2026 Lucy Ada Randall
+# See LICENSE file for full MIT license text.
+
 CC = cc
 STD := $(shell $(CC) -std=c23 -E -x c /dev/null -o /dev/null 2>/dev/null && echo c23 || echo c2x)
-CFLAGS = -Wall -Wextra -pedantic -std=$(STD) -O3 -D_POSIX_C_SOURCE=200809L
+CFLAGS = -Wall -Wextra -pedantic -std=$(STD)  -Os -ffast-math -march=native -lpthread -D_POSIX_C_SOURCE=200809L
 LDFLAGS =
 
 TARGET = ccompress

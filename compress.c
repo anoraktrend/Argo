@@ -1,3 +1,27 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Argo — Self-Extracting C Archives
+ * Copyright (c) 2026 Lucy Ada Randall
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -766,6 +790,11 @@ static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
     if (!o) return 1;
+    fputs("// SPDX-License-Identifier: MIT\n", o);
+    fputs("// Argo - Self-Extracting C Archives\n", o);
+    fputs("// Copyright (c) 2026 Lucy Ada Randall\n", o);
+    fputs("// See LICENSE file for full MIT license text.\n", o);
+    fputs("//\n", o);
     fputs("// cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract\n", o);
     fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n", o);
     fputs("#if defined(_MSC_VER)\n", o);
@@ -1037,8 +1066,8 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
-    fputs("size_t o=0;\n", o);
     fputs("#ifdef _MSC_VER\n", o);
+    fputs("size_t o=0;\n", o);
     fputs("for(i=0;i<(size_t)F;i++){\n", o);
     fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return 1;\n", o);
     fputs("fwrite(b+o,1,S[i],f);fclose(f);puts(N[i]);o+=S[i];}\n", o);

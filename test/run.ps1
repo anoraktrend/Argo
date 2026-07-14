@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Argo - Self-Extracting C Archives
+# Copyright (c) 2026 Lucy Ada Randall
+# See LICENSE file for full MIT license text.
+
 $CC = "cl"
 $CFLAGS = @("/std:c17", "/O2")
 $PASS = 0; $FAIL = 0
