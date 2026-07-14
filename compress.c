@@ -1047,9 +1047,6 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);
     fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
     fputs("#endif\n", o);
-    fputs("#ifdef _MSC_VER\n", o);
-    fputs("{SYSTEM_INFO si;GetSystemInfo(&si);nh=(long)si.dwNumberOfProcessors;}\n", o);
-    fputs("#endif\n", o);
     fputs("size_t nt=nh>0?(size_t)nh:1;\n", o);
     fputs("if(nt>F)nt=F;pthread_t*tt=malloc(nt*sizeof(pthread_t));\n", o);
     fputs("EJ*mj=malloc(nt*sizeof(EJ));\n", o);
