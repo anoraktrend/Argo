@@ -1075,15 +1075,12 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b,ts);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
-    fputs("#ifdef _MSC_VER\n", o);
-    fputs("size_t o=0;\n", o);
-    fputs("for(i=0;i<(size_t)F;i++){\n", o);
-    fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return 1;\n", o);
-    fputs("fwrite(b+o,1,S[i],f);fclose(f);puts(N[i]);o+=S[i];}\n", o);
-    fputs("#else\n", o);
     fputs("long nh=1;\n", o);
     fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);
     fputs("nh=sysconf(_SC_NPROCESSORS_ONLN);\n", o);
+    fputs("#endif\n", o);
+    fputs("#ifdef _MSC_VER\n", o);
+    fputs("{SYSTEM_INFO si;GetSystemInfo(&si);nh=(long)si.dwNumberOfProcessors;}\n", o);
     fputs("#endif\n", o);
     fputs("size_t nt=nh>0?(size_t)nh:1;\n", o);
     fputs("if(nt>F)nt=F;pthread_t*tt=malloc(nt*sizeof(pthread_t));\n", o);
@@ -1093,7 +1090,6 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("pthread_create(&tt[i],NULL,xt,&mj[i]);}\n", o);
     fputs("for(i=0;i<nt;i++)pthread_join(tt[i],NULL);\n", o);
     fputs("free(tt);free(mj);\n", o);
-    fputs("#endif\n", o);
     fputs("free(b);return 0;}\n", o);
     if (fclose(o) != 0) { fprintf(stderr, "%s: write error\n", path); return 1; }
     return 0;
