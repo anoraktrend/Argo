@@ -1037,6 +1037,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
     fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
+    fputs("size_t o=0;\n", o);
     fputs("#ifdef _MSC_VER\n", o);
     fputs("for(i=0;i<(size_t)F;i++){\n", o);
     fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return 1;\n", o);
