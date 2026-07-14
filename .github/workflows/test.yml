@@ -15,13 +15,6 @@ jobs:
         run: |
           make test
           ./test/run.sh
-      - name: Generate Argo.c for downstream jobs
-        run: ./ccompress compress.c Makefile README.md -o Argo.c
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Argo.c
-          path: Argo.c
-
   linux-musl:
     runs-on: ubuntu-latest
     container: alpine:latest
