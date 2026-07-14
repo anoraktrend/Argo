@@ -23,6 +23,12 @@ Recommended flags for the generated archive (produces smaller binaries):
 cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract
 ```
 
+On MSVC:
+
+```
+cl /O1 /fp:fast Argo.c /Fe:extract.exe
+```
+
 ## How it works
 
 1. **LZMA2 compression** with a range-coded, probability-model entropy coder and multithreaded chunked encoding
@@ -30,12 +36,12 @@ cc -Os -ffast-math -march=native -lpthread Argo.c -o extract && ./extract
 3. **Base85 encoding** of the compressed stream using a C-string-safe alphabet (avoids `"` and `\`)
 4. The decoder (`lz` + `b8`) is embedded in the generated C file alongside a threaded file extractor
 
-The generated archive decompresses and extracts files using **multiple threads** via C11 `<threads.h>`.
+The generated archive decompresses and extracts files using **POSIX threads** (pthreads) on Linux/macOS/MinGW, and single-threaded extraction on MSVC.
 
 ## Requirements
 
 - A C23 compiler (GCC, Clang) for the compressor
-- The generated archive requires C11 `<threads.h>` support and compiles under C++ as well
+- The generated archive compiles with any C99-or-later compiler (GCC, Clang, MSVC, MinGW) on Linux, macOS, or Windows
 
 ## Building
 
@@ -49,6 +55,15 @@ make
 make test
 ```
 
+Or run the full test suite:
+
+```sh
+test/run.sh              # Linux, macOS, MinGW
+pwsh test/run.ps1        # MSVC on Windows
+```
+
+The CI pipeline (`test.yml`) runs tests across 5 environments: Linux (glibc), Alpine Linux (musl), macOS, MinGW (msys2), and MSVC.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.
