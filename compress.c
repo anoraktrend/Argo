@@ -1040,10 +1040,8 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("size_t o=0;\n", o);
     fputs("#ifdef _MSC_VER\n", o);
     fputs("for(i=0;i<(size_t)F;i++){\n", o);
-    fputs("char*fp=fixpath(N[i]);fprintf(stderr,\"fixpath returns: %%s\\n\",fp?fp:\"NULL\");if(!fp){free(b);return 1;}\n", o);
-    fputs("FILE*f=fopen(fp,\"wb\");fprintf(stderr,\"fopen returns: %%p\\n\",(void*)f);if(!f){free(fp);free(b);return 1;}\n", o);
-    fputs("size_t nw=fwrite(b+o,1,S[i],f);fprintf(stderr,\"fwrite: %%zu of %%zu\\n\",nw,S[i]);\n", o);
-    fputs("fclose(f);free(fp);puts(N[i]);o+=S[i];}\n", o);
+    fputs("char*fp=fixpath(N[i]);FILE*f=fopen(fp,\"wb\");free(fp);if(!f)return 1;\n", o);
+    fputs("fwrite(b+o,1,S[i],f);fclose(f);puts(N[i]);o+=S[i];}\n", o);
     fputs("#else\n", o);
     fputs("long nh=1;\n", o);
     fputs("#ifdef _SC_NPROCESSORS_ONLN\n", o);

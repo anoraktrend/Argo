@@ -28,12 +28,12 @@ foreach ($f in Get-ChildItem test/input) {
         Write-Host "  [dbg N array: $($match.Groups[1].Value)]"
     }
 
-    & $CC $CFLAGS "test/work/$name.c" "/Fetest/work/${name}_extract" 2>$null
+    & $CC $CFLAGS "test/work/$name.c" "/Fetest/work/${name}_extract.exe" 2>$null
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL (compile)"; $FAIL++; continue }
 
     New-Item -ItemType Directory -Force -Path "test/work/test/input" | Out-Null
     Push-Location test/work
-    $out = & .\${name}_extract 2>&1
+    $out = & .\${name}_extract.exe 2>&1
     $exitCode = $LASTEXITCODE
     Write-Host "  [dbg extract exit: $exitCode]"
     Write-Host "  [dbg extract out: $out]"
