@@ -28,10 +28,14 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <errno.h>
 
 #ifdef _MSC_VER
 #include <windows.h>
 #include <process.h>
+#include <io.h>
+#define fseeko _fseeki64
+#define ftello _ftelli64
 #else
 #include <pthread.h>
 #include <unistd.h>
@@ -88,8 +92,10 @@ typedef struct { size_t *hh, *hn; } MState;
 
 static MState *ms_new(void) {
     MState *ms = calloc(1, sizeof(MState));
+    if (!ms) return NULL;
     ms->hh = malloc(HS * sizeof(size_t));
     ms->hn = calloc(WIN2, sizeof(size_t));
+    if (!ms->hh || !ms->hn) { free(ms->hh); free(ms->hn); free(ms); return NULL; }
     memset(ms->hh, 0xFF, HS * sizeof(size_t));
     return ms;
 }
@@ -324,6 +330,7 @@ static int lzma_encode(const unsigned char *src, size_t n, Bf *out,
     uint16_t *lit_probs = rep_len_high_coder + (1 << 8);
 
     MState *ms = ms_new();
+    if (!ms) { free(probs); return -1; }
 
     RangeEnc rc;
     rc_init(&rc, out);
@@ -574,6 +581,7 @@ static int lzma2_encode(const unsigned char *src, size_t n, Bf *out, uint32_t di
 
     LZMAWork *works = calloc((size_t)nchunks, sizeof(LZMAWork));
     pthread_t *threads = calloc((size_t)nchunks, sizeof(pthread_t));
+    if (!works || !threads) { free(works); free(threads); return -1; }
     size_t off = 0;
 
     for (int i = 0; i < nchunks; i++) {
@@ -789,7 +797,7 @@ static void b85e_arr(FILE *o, const unsigned char *d, size_t n) {
 static int gen(const char *path, const char **fn, size_t *fl,
                const unsigned char *cd, size_t *cs, size_t *os, int nf) {
     FILE *o = fopen(path, "w");
-    if (!o) return 1;
+    if (!o) { fprintf(stderr, "%s: %s\n", path, strerror(errno)); return 1; }
     fputs("// SPDX-License-Identifier: MIT\n", o);
     fputs("// Argo - Self-Extracting C Archives\n", o);
     fputs("// Copyright (c) 2026 Lucy Ada Randall\n", o);
@@ -874,13 +882,14 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("for(j=0;j<tot;j++)sym[j]=*(*p)++;\n", o);
     fputs("while(ml>0&&!cnt[ml-1])ml--;return ml>0?ml:1;}\n", o);
 
-    fputs("static size_t lzma2_d(const unsigned char*in,size_t n,unsigned char*out){\n", o);
+    fputs("static size_t lzma2_d(const unsigned char*in,size_t n,unsigned char*out,size_t out_sz){\n", o);
     fputs("size_t p=0,op=0;\n", o);
     fputs("while(p<n){\n", o);
     fputs("unsigned ctl=in[p++];\n", o);
     fputs("if(ctl==0)break;\n", o);
     fputs("if(ctl==1||ctl==2){\n", o);
     fputs("unsigned sz=(unsigned)in[p]<<8|in[p+1];p+=2;\n", o);
+    fputs("if(op+sz>out_sz)return -1;\n", o);
     fputs("memcpy(out+op,in+p,sz);p+=sz;op+=sz;continue;}\n", o);
 
     fputs("unsigned props=0,uc_hi=0;\n", o);
@@ -892,7 +901,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned lc=3,lp=0,pb=2;\n", o);
     fputs("if(ctl&0x80){unsigned d=props;lc=d%9;d/=9;pb=d/5;lp=d%5;}\n", o);
 
-    fputs("RC rc;rc_init(&rc,in,&p);\n", o);
+    fputs("RC rc;if(!rc_init(&rc,in,&p))return -1;\n", o);
     fputs("size_t pc=1846+768*(1<<(lp+lc));unsigned short*pr=calloc(pc,2);\n", o);
     fputs("if(!pr)return -1;\n", o);
     fputs("for(size_t i=0;i<pc;i++)pr[i]=PIV;\n", o);
@@ -921,7 +930,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned sr=0;\n", o);
     fputs("unsigned r0=0,r1=0,r2=0,r3=0;\n", o);
     fputs("size_t ep=0;\n", o);
-    fputs("while(ep<uc){\n", o);
+    fputs("while(ep<uc&&ep<out_sz){\n", o);
     fputs("unsigned ps2=ep&((1<<pb)-1);\n", o);
     fputs("unsigned st2=(sr<<4)|ps2;\n", o);
     fputs("if(!rc_b(&rc,&im[st2])){\n", o);
@@ -990,14 +999,14 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("free(pr);\n", o);
     fputs("}return op;}\n", o);
 
-    fputs("static void lz(const unsigned char*i,size_t n,unsigned char*e){\n", o);
+    fputs("static void lz(const unsigned char*i,size_t n,unsigned char*e,size_t es){\n", o);
     fputs("int flg=i[0];\n", o);
     fputs("if(flg==0){memcpy(e,i+1,n-1);return;}\n", o);
     fputs("if(flg==3){size_t p=1;\n", o);
     fputs("size_t us=rd_vl(i,&p),e2=0;\n", o);
     fputs("while(e2<us){unsigned char b=i[p++];size_t r=rd_vl(i,&p);\n", o);
     fputs("memset(e+e2,b,r);e2+=r;}return;}\n", o);
-    fputs("if(flg>=6){lzma2_d(i+1,n-1,e);if(flg&1)x86(e,n);return;}\n", o);
+    fputs("if(flg>=6){size_t r=lzma2_d(i+1,n-1,e,es);if(r>es)return;if(flg&1)x86(e,r);return;}\n", o);
     fputs("int e8=flg==2||flg==5;size_t p=1,q=0,r0=0,r1=0,r2=0;\n", o);
 
     fputs("if(flg>=4){\n", o);
@@ -1064,7 +1073,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("unsigned char*b=malloc(ts);if(!b)return 1;\n", o);
     fprintf(o, "size_t cl=(C+3)/4*4;\n");
     fputs("unsigned char*c=malloc(cl);if(!c){free(b);return 1;}\n", o);
-    fputs("b8(D,(C+3)/4*5,c);lz(c,C,b);free(c);\n", o);
+    fputs("b8(D,(C+3)/4*5,c);lz(c,C,b,ts);free(c);\n", o);
     fputs("for(i=0;i<(size_t)F;i++)mkpath(N[i]);\n", o);
     fputs("#ifdef _MSC_VER\n", o);
     fputs("size_t o=0;\n", o);
@@ -1086,7 +1095,7 @@ static int gen(const char *path, const char **fn, size_t *fl,
     fputs("free(tt);free(mj);\n", o);
     fputs("#endif\n", o);
     fputs("free(b);return 0;}\n", o);
-    fclose(o);
+    if (fclose(o) != 0) { fprintf(stderr, "%s: write error\n", path); return 1; }
     return 0;
 }
 
@@ -1109,12 +1118,14 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < ni; i++) {
         FILE *f = fopen(in[i], "rb");
-        if (!f) { ret = 1; goto cleanup; }
-        fseek(f, 0, SEEK_END); long n = ftell(f); rewind(f);
-        if (n < 0) { fclose(f); ret = 1; goto cleanup; }
+        if (!f) { fprintf(stderr, "%s: %s\n", in[i], strerror(errno)); ret = 1; goto cleanup; }
+        if (fseeko(f, 0, SEEK_END) != 0) { fclose(f); fprintf(stderr, "%s: seek failed\n", in[i]); ret = 1; goto cleanup; }
+        long long n = ftello(f);
+        if (n < 0) { fclose(f); fprintf(stderr, "%s: tell failed\n", in[i]); ret = 1; goto cleanup; }
+        rewind(f);
         db[i] = malloc((size_t)n + 1);
-        if (!db[i]) { fclose(f); ret = 1; goto cleanup; }
-        if (fread(db[i], 1, (size_t)n, f) != (size_t)n) { fclose(f); ret = 1; goto cleanup; }
+        if (!db[i]) { fclose(f); fprintf(stderr, "%s: malloc failed\n", in[i]); ret = 1; goto cleanup; }
+        if (fread(db[i], 1, (size_t)n, f) != (size_t)n) { fclose(f); fprintf(stderr, "%s: read failed\n", in[i]); ret = 1; goto cleanup; }
         fclose(f);
         osz[i] = (size_t)n;
         total += osz[i];
