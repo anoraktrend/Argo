@@ -64,6 +64,12 @@ pwsh test/run.ps1        # MSVC on Windows
 
 The CI pipeline (`test.yml`) runs tests across 5 environments: Linux (glibc), Alpine Linux (musl), macOS, MinGW (msys2), and MSVC.
 
+## Version
+
+```sh
+./ccompress --version
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.

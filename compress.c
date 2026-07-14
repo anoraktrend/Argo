@@ -1104,6 +1104,7 @@ int main(int argc, char **argv) {
     int ni = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o")) { if (++i >= argc) return 1; out = argv[i]; }
+        else if (!strcmp(argv[i], "--version")) { puts("Argo 1.4.0"); return 0; }
         else if (argv[i][0] == '-') return 1;
         else if (ni < MXF) in[ni++] = argv[i];
     }
