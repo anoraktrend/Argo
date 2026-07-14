@@ -40,6 +40,22 @@ jobs:
           make test
           ./test/run.sh
 
+  haiku:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test in Haiku VM
+        uses: vmactions/haiku-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkgman install -y cmd:gcc cmd:make
+          run: |
+            std=c23; cc -std=$std -E -x c /dev/null -o /dev/null 2>/dev/null || std=c2x
+            cc -Wall -Wextra -pedantic -std=$std -O2 -D_POSIX_C_SOURCE=200809L -lpthread -o ccompress compress.c
+            make test
+            ./test/run.sh
+
   mingw:
     runs-on: windows-latest
     defaults:
