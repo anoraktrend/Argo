@@ -1,5 +1,7 @@
 # Argo — Self-Extracting C Archives
 
+[![test](https://github.com/anoraktrend/Argo/actions/workflows/test.yml/badge.svg)](https://github.com/anoraktrend/Argo/actions/workflows/test.yml)
+
 Argo is a compression tool that creates **self-extracting C source archives**.
 The output is a single `.c` file that decompresses and restores the original files when compiled and run.
 
